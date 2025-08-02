@@ -9,5 +9,5 @@ namespace yay {
 }
 
 int main() {
-    cout << "doing a + c" << yay::a + yay::c << endl;
+    cout << "doing a + c: " << yay::a + yay::c << endl;
 }
