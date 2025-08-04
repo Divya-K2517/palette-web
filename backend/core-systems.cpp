@@ -1,4 +1,3 @@
-//this file defines structures and classes 
 #pragma once
 #include <string>    
 #include <vector>  
@@ -11,8 +10,15 @@
 #include <atomic>
 #include <memory> //for smart pointers
 #include <thread>
+#include <unordered_map> //for caching
+//this file defines structures and classes for core systems
+//summary:
+//class SystemManager is the brains: starts engines(for weaviate & pinterest), spawns threads, acceptes requests, and records telemetry data
+//class VectorEngine does the vector search(communicating with weaviate), cahches results, and handles images
+//class TelemetryProcessor keeps track of performance data and will help detect slowness or bugs
+//SystemHealth gives an overview of the system health
 
-namespace core_systems {
+namespace coreSystems {
 
     enum class SystemHealth {
     NOMINAL,    // All systems green
@@ -46,7 +52,7 @@ namespace core_systems {
         nlohmann::json toJson() const;
     }
 
-    struct SystemTelemetry { //will be used to track system health and performance 
+    struct SystemHealth { //will be used to track system health and performance 
         std::atomic<float> cpuUsage{0.0f};
         std::atomic<float> memoryUsage{0.0f};
         std::atomic<size_t> activeConnections{0};
@@ -67,7 +73,7 @@ namespace core_systems {
         std::unique_ptr<VectorEngine> primaryVectorEngine;
         std::unique_ptr<VectorEngine> backupVectorEngine;
         std::unique_ptr<TelemetryProcessor> telemetryProcessor;
-        std::unique_ptr<SystemTelemetry> healthMetrics;
+        std::unique_ptr<SystemHealth> healthMetrics;
             //std::unique_ptr is a smart pointer that deletes the object when it goes out of scope
             //ensures that the object is deleted when the SystemManager object is destroyed
         
@@ -99,9 +105,87 @@ namespace core_systems {
         bool initialize(); 
         void shutdown(); 
         std::vector<Node> search(const std::string& query);
-        SystemTelemetry getSystemHealth() const; //no parameters
+        SystemHealth getSystemHealth() const; //no parameters
         void recordTelemetry(const SearchTelemetry& telemetry); 
         bool emergencySubsystemRestart(const std::string& subsystem_name);
     };
+    class VectorEngine { //deals with weaviate/pinterest, caches results and handles images
+    private:
+        std::string engineId;
+        std::string engineType; //"primary" or "backup"
+        bool isOperational; //indicates if the engine is operational
 
-}
+        //connection pools for external services w/ unique_ptr
+        std::unique_ptr<class WeaviateClient> weaviateClient_;
+        std::unique_ptr<class PinterestClient> pinterestClient_;   
+
+        //local cache
+        std::unordered_map<std::string, std::vector<Node>> searchCache_;
+        std::unordered_map<std::string, std::vector<struct PinterestImage>> imageCache_;
+        std::mutex cacheMutex;
+
+        std::chrono::system_clock::time_point lastCacheUpdate_;
+        static constexpr std::chrono::minutes CACHE_EXPIRY_TIME{10};
+
+    public:
+        explicit VectorEngine(const std::string& engineType);
+        ~VectorEngine();
+
+        bool initialize();
+        void shutdown();
+        //main vector search function
+        std::vector<Node> vectorSearch(const std::string& query);
+        bool isOperational() const {
+            return isOperational;
+        }
+        //cache related
+        void clearCache();
+        size_t getCacheSize() const;
+    };
+    class TelemetryProcessor { 
+        //for stats and analytics
+    private:
+        std::atomic<bool> isRunning{false};
+            //atomic types make operations on them indivisible, preventing race conditions
+        std::mutex processingMutex;
+        
+        std::vector<SearchTelemetry> telemeteryHistory;
+        static constexpr size_t MAX_TELEMETRY_RECORDS = 10000;
+    public:
+        TelemetryProcessor() = default;
+        ~TelemetryProcessor() = default;
+
+        void start();
+        void stop();
+
+        void processTelemetry(const SearchTelemetry& telemetry);
+
+        // Analytics functions
+        float getAverageResponseTime() const;
+        float getErrorRate() const;
+        size_t getTotalQueries() const;
+        
+        nlohmann::json getPerformanceReport() const;
+    };
+    namespace utils { 
+        std::string generateUUID(); //function to generate a UUID
+        std::chrono::system_clock::time_point getCurrentTime();
+        uint64_t getTimestampMs();
+        float calculateSystemLoad();
+
+        class PerformanceTimer { //to time events
+        private:
+            std::chrono::high_resolution_clock::time_point startTime;
+        public: 
+            PerformanceTimer() : startTime(std::chrono::high_resolution_clock::now()) {}
+                //constructor for the class that defines startTime as the current time
+            
+            uint64_t elapsedMs() const {
+                //function to calc time elapses from startTime to now
+                auto endTime = std::chrono::high_resolution_clock::now();
+                return std::chrono::duration_cast<std::chrono::milliseconds>(
+                    end_time - start_time_).count();
+            }
+        };  
+    } //end of namespace utils   
+} //end of namespace core_systems
