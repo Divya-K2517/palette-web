@@ -127,5 +127,48 @@ namespace coreSystems {
             }
         }
     private:
+        //function to parse Weaviate JSON response and returns a vector of Nodes
+        std::vector<Node> parseWeaviateResponse (const nlohmann::json& response, const std::string& original_query) {
+            //using references to inputs to avoid copying and save memory - operations affect the original object
+            std::vector<Node> results;
+
+            if (!response.contains("data") || !response["data"].contains("Get") || !response["data"]["Get"].contains("Concept")) { 
+                return results; //returning empty vector if response doesn't have expected structure
+                std::cout << "Weaviate response missing expected fields, returning an empty vector" << std::endl;
+            }
+            std::cout <<"Raw weaviate response: " << response << std::endl;
+
+            const auto& concepts = response["data"]["Get"]["Concept"];
+                //read only reference to the concepts array in the json response
+                //concepts isnt an array by itself, but its memory spot points to the same spot as response["data"]["Get"]["Concept"] 
+            
+            for (const auto& concept : concepts) { //iterating over each concept in the concepts array
+                Node node;
+                node.id = utils::generateUUID(); //generating a unique ID for the node
+                node.name = concept.value("name", ""); //getting the name field, defaulting to empty string if not present
+                node.similarityScore = concept["_additional"].value("certainty", 0.0f); //getting certainty from _additional field
+                node.timestamp = utils::getCurrentTime(); //setting current time as timestamp
+                node.healthStatus = SystemHealth::NOMINAL; 
+                
+                //extracting embedding vector
+                if (concept["_additional"].contains("vector")) { 
+                    const auto& vector = concept["_additional"]["vector"]; //reference to vector (ex. [0.1, 0.2, 0.3] - array of floats)
+                    if (vector.is_array()) { //checking if vector is an array 
+                        for (const auto& val : vector) {
+                            node.embedding.push_back(val.get<float>()); //adding each float in the vector array to node.embedding
+                        }
+                    }
+                }
+                results.push_back(std::move(node)); 
+                    //std::move(node) converts noce from lvalue(named object) to rvalue(temp)
+                    //push_back() detects that node is an rvalue and steals the memory+poiters from node instead of copying
+                    //more efficient than copying (which is just push_back(node))
+            }
+            return results; //returning the vector of Nodes
+        }
+    };
+
+    class PinterestClient {
+
     };
 }
