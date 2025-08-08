@@ -1,4 +1,4 @@
-# Privacy Policy 
+#  Divya-K Palette Web Privacy Policy
 
 This is a personal development project. It does not:
 
