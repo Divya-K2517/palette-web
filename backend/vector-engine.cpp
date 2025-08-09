@@ -32,7 +32,7 @@ namespace coreSystems {
         std::mutex curlMutex; //to protect curl handle from concurrent access
         
         struct curlResponse { 
-            std:: string data;
+            std::string data;
             long responseCode;
         };
 
@@ -169,6 +169,69 @@ namespace coreSystems {
     };
 
     class PinterestClient {
+        std::string apiKey;
+        CURL* curlHandle;
+        std::mutex curlMutex;
 
+        //rate limiting
+        std::atomic<uint32_t> requestsMade{0};
+            //atomic variables let multiple threads access them without locks
+        std::chrono::system_clock::time_point windowStart;
+        static constexpr uint32_t MAX_REQUESTS_PER_DAY = 1000; 
+        std::mutex rateLimitMutex;
+
+        struct curlResponse { 
+            std::string data;
+            long responseCode;
+        };
+
+        static size_t writeCallback(void* contents, size_t size, size_t nmemb, curlResponse* response) { 
+            //when data comes back from a request it will add it to curlResponse.data
+            //nmemb is number of elements
+            size_t totalSize = size * nmemb;
+            response -> data.append(static_cast<char*>(contents), totalSize)
+                //casting void* contents to char*
+            return totalSize; //tells curl how many bytes were written
+        }
+    public:
+        explicit PinterestClient(const std::string& apiKey) 
+            : apiKey(apiKey) curlHandle(nullptr), windowStart(std::chrono::system_clock::now()) {
+                curlHandle = curl_easy_init(); //creates a cURL, retuns nullptr if it fails
+                if (!curlHandle) {
+                    throw std::runtime_error("Failed to initialize CURL for PinterestClient");
+                }
+        }
+        ~PinterestClient() { //destructor
+            if (curlHandle) {
+                curl_easy_cleanup(curlHandle); //cleans up the curlHandle
+            } 
+        }
+
+        bool canMakeRequest() { 
+            std::lock_guard<std::mutex> lock(rateLimitMutex);
+            
+            auto now = std::chrono::system_clock::now();
+            auto daysElapsed = std::chrono::duration_cast<std::chrono::days>(now - windowStart).count();
+
+            // reset window if a day has passed
+            if (daysElapsed >= 1) {
+                requestsMade_ = 0;
+                windowStart_ = now;
+            }
+            return requestsMade < MAX_REQUESTS_PER_DAY; //returning true if requests made is less than max allowed
+        }
+
+        std::vector<pinterestImage> searchPins (const std::string& query) {
+            if (!canMakeRequest()) {
+                std::cout << "Pinterest rate limit exceeded, using cached data instead" << std::endl;
+                return {};
+            }
+
+            std::lock_guard<std::mutex> lock(curlMutex);
+            requestsMade++;
+
+            //constructing the Pinterest API search URL
+            std::string url = 
+        }
     };
 }
