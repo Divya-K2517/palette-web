@@ -307,5 +307,59 @@ namespace coreSystems {
         };
 
         //implementing VectorEngine
-        //TODO
+        VectorEngine::VectorEngine(const std::string& engineType) //engine type is "primary" or "backup"
+            : engineId(utils::generateUUID()), //setting up vector engine member variables
+            engineType(engineType),
+            isOperational(false),
+            lastCacheUpdate(std::chrono::system_clock::now()) {
+        }
+
+        VectorEngine::~VectorEngine() {
+            shutdown();
+        }
+        bool VectorEngine::initialize() {
+            try { //initializing weaviate and pinterest clients
+                std::string weaviateUrl = (engineType == "primary") ? "http://localhost:8080" : "http://backup-weaviate:8080";
+                weaviateClient = std::make_unique<WeaviateClient>(weaviateUrl);
+                    //std::make_unique returns a std::unique_ptr<WeaviateClient>
+                    //this object will be deleted when unique_ptr goes out of scope (vector engine objecft is deleted or weaviateClient is reset/gets new pointer)
+                    //prevents memory leacks
+                std::string pinterestApiKey = std::getenv("PINTEREST_API_KEY") ? 
+                    std::getenv("PINTEREST_API_KEY") : "";
+                if (pinterestApiKey.empty()) {
+                    std::cerr << "PINTEREST_API_KEY is not set" << std::endl;
+                }
+                pinterestClient = std::make_unique<PinterestClient>(pinterestApiKey);
+                
+                isOperational = true;
+                std::cout << engineType << " Vector Engine initialized: " << engineId << std::endl;
+
+                return true;
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to initialize " << engine_type_ << " Vector Engine: " << e.what() << std::endl;
+                return false;
+            }
+        }
+        void VectorEngine::shutdown() {
+            isOperational = false;
+            clearCache();
+        }
+        std::vector<Node> VectorEngine::vectorSearch(const std::string& query) {
+            //TODO
+        }
+        std::vector<Node> VectorEngine::checkCache(const std::string& query) {
+            //TODO
+        }
+        void VectorEngine::updateCache(const std::string& query, const std::vector<Node>& nodes) {
+            //TODO
+        }
+        std::vector<Node> VectorEngine::enhanceWithPinterestData(std::vector<Node> nodes) {
+            //TODO
+        }
+        void VectorEngine::clearCache() {
+            //TODO
+        }
+        size_t VectorEngine::getCacheSize() const {
+            //TODO
+        }
     };

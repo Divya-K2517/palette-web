@@ -127,12 +127,6 @@ namespace coreSystems {
         std::chrono::system_clock::time_point lastCacheUpdate_;
         static constexpr std::chrono::minutes CACHE_EXPIRY_TIME{10};
 
-    public:
-        explicit VectorEngine(const std::string& engineType);
-        ~VectorEngine();
-
-        bool initialize();
-        void shutdown();
         //main vector search function
         std::vector<Node> vectorSearch(const std::string& query);
         bool isOperational() const {
