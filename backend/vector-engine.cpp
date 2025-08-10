@@ -221,7 +221,7 @@ namespace coreSystems {
             return requestsMade < MAX_REQUESTS_PER_DAY; //returning true if requests made is less than max allowed
         }
 
-        std::vector<pinterestImage> searchPins (const std::string& query) {
+        std::vector<pinterestImage> searchPins (const std::string& query) { //makes request to pinterest for pins
             if (!canMakeRequest()) {
                 std::cout << "Pinterest rate limit exceeded, using cached data instead" << std::endl;
                 return {};
@@ -231,7 +231,81 @@ namespace coreSystems {
             requestsMade++;
 
             //constructing the Pinterest API search URL
-            std::string url = 
+            std::string url = "https://api.pinterest.com/v5/pins/search?query=" + 
+                         curl_easy_escape(curlHandle, query.c_str(), query.length()) + 
+                         "&limit=10";
+
+            curlResponse response;
+
+            //configuring curl for pinterest api
+            curl_easy_setopt(curlHandle, CURLOPT_URL, url.c_str()); //sets target url for api
+            curl_easy_setopt(curlHandle, CURLOPT_HTTPGET, 1L); //making the request a GET request
+            curl_easy_setopt(curlHandle, CURLOPT_WRITEFUNCTION, writeCallback); //assigning writeCallback to handle incoming data
+            curl_easy_setopt(curlHandle, CURLOPT_WRITEDATA, &response); //passes address of response (then writeCallback uses response)
+            curl_easy_setopt(curlHandle, CURLOPT_TIMEOUT, 15L); //15 second timeout for api
+
+            //auth header
+            struct curl_slist* headers = nullptr //headers points to the spot in memory where the actual headers are stored
+            std::string authHeader = "Authorization: Bearer " + apiKey;
+            headers = curl_slist_append(headers, authHeader.c_str());
+            curl_easy_setopt(curl_handle_, CURLOPT_HTTPHEADER, headers);
+
+            //execute request
+            CURLcode res = curl_easy_perform(curlHandle);
+                //RES VS RESPONSE:
+                //response is the curlResponse struct that stores data from weaviate and the HTTP response code
+                //res is a CURLcode that just indicates if the request worked, not the HTTP response code
+            curl_easy_getinfo(curlHandle, CURLINFO_RESPONSE_CODE, &response.responseCode);
+            curl_slist_free_all(headers);
+
+            if (res != CURLE_OK || response.responseCode != 200) {
+                std::cerr << "Pinterest request failed: " << curl_easy_strerror(res) 
+                      << " (HTTP " << response.response_code << ")" << std::endl;
+                return {};
+            }
+
+            //parse pinterest api response
+            try {
+                auto jsonResponse = nlohmann::json::parse(response.data); //converts json string into a C++ nlohmann::json object
+                std::cout << "raw pinterest api response: " << jsonResponse.dump(2) << std::endl;
+                return parsePinterestResponse(jsonResponse)
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to parse Pinterest response: " << e.what() << std::endl;
+                return {};
+            }
         }
+    private: 
+            std::vector<pinterestImage> parsePinterestResponse (const nlohman::json& response) {
+                std::vector<pinterestImage> images;
+                
+                if (!response.contains("items") || 
+                    !response["items"].is_array() || 
+                    response["items"].empty()) 
+                {
+                    return images;
+                }
+                for (const auto& item : response["items"]) {
+                    pinterestImage image;
+                    image.id = item.value("id", "");
+                    image.description = item.value("description", "");
+                    //getting url
+                    if (item.contains("media") && item["media"].contains("images") && item["media"]["images"].contains("url")) {
+                        //TODO:
+                        //item["media"]["images"].contains("url") - might need to check if images contains "original", urls possibly stored there
+                        image.url = item["media"]["images"]["url"].value("url", "");
+                    }
+                    //getting board name (idt there will be one most times)
+                    if (item.contains("board") && item["board"].contains("name")) {
+                        image.boardName = item["board"]["name"];
+                    }
+                    if (!image.id.empty() && !image.url.empty()) { //return image only if it has id and url
+                        images.push_back(std::move(image));
+                    }
+                }
+                return images;
+            }
+        };
+
+        //implementing VectorEngine
+        //TODO
     };
-}
