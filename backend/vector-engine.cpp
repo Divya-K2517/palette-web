@@ -59,10 +59,11 @@ namespace coreSystems {
         }
         // Function to perform a semantic search
         //given a search string it will construct a GraphQL query
+        //also takes in level (0=query, 1=first level, 2=second level) to give to parseWeaviateResponse
         //post to weaviate endpoint
         //parse results
-        //return a vector of Nodes
-        std::vector<Node> semanticSearch(const std::string& query) { 
+        //return a vector of Nodes in descending order of closeness to query (most related nodes come first)
+        std::vector<Node> semanticSearch(const std::string& query, const int level) { 
             //locking curlHandle with curlMutex
             std::lockGuard<std::mutex> lock(curlMutex);
             //constructing the GraphQL query
@@ -120,7 +121,7 @@ namespace coreSystems {
             //parsing JSON response
             try {
                 auto jsonResponse = nlohmann::json::parse(response.data);
-                return parseWeaviateResponse(jsonResponse, query); //TODO: write parseWeaviateResponse
+                return parseWeaviateResponse(jsonResponse, query, level); //TODO: write parseWeaviateResponse
             } catch (const std::exception& e) {
                 std::cerr << "Failed to parse Weaviate response: " << e.what() << std::endl;
                 return {};
@@ -128,7 +129,7 @@ namespace coreSystems {
         }
     private:
         //function to parse Weaviate JSON response and returns a vector of Nodes
-        std::vector<Node> parseWeaviateResponse (const nlohmann::json& response, const std::string& original_query) {
+        std::vector<Node> parseWeaviateResponse (const nlohmann::json& response, const std::string& original_query, const int level) {
             //using references to inputs to avoid copying and save memory - operations affect the original object
             std::vector<Node> results;
 
@@ -149,6 +150,7 @@ namespace coreSystems {
                 node.similarityScore = concept["_additional"].value("certainty", 0.0f); //getting certainty from _additional field
                 node.timestamp = utils::getCurrentTime(); //setting current time as timestamp
                 node.healthStatus = SystemHealth::NOMINAL; 
+                node.level = level;
                 
                 //extracting embedding vector
                 if (concept["_additional"].contains("vector")) { 
@@ -330,7 +332,8 @@ namespace coreSystems {
                     std::cerr << "PINTEREST_API_KEY is not set" << std::endl;
                 }
                 pinterestClient = std::make_unique<PinterestClient>(pinterestApiKey);
-                
+                    //weaviateClient and pinterestClient are pointers bc of std::make_unique
+                    //they point to the address of the new WeaviateClient/PinterestClient object
                 isOperational = true;
                 std::cout << engineType << " Vector Engine initialized: " << engineId << std::endl;
 
@@ -345,16 +348,95 @@ namespace coreSystems {
             clearCache();
         }
         std::vector<Node> VectorEngine::vectorSearch(const std::string& query) {
+            if !(isOperational) {
+                throw std::runtime_error(engineType + " Vector Engine is not operational");
+            }
+            std::cout << engineType_ << " Engine: Starting vector search for '" << query << "'" << std::endl;
+            //checking local cache first
+            auto cachedResults = checkCache(query);
+            if (!cachedResults.empty()) { //match found in cache
+                std::cout << << "Cached result found for query: " << query << std::endl; 
+                return cachedResults;
+            }
+            
+            auto relatedNodes = weaviateClient -> semanticSearch(query, 1); //using -> bc weaviateClient is a pointer to the acc WeaviateClient object
+            if (relatedNodes.empty()) {
+                std::cout << "No related concepts found for query: " << query << std::endl;
+                return {};
+            }
+            
+            std::vector<Node> allNodes = relatedNodes;
+
+            //getting second level nodes for top 3 nodes 
+            size_t numTopNodes = std::min(static_cast<size_t>(3), relatedNodes.size());
+                //finds how many top nodes there are(either 3 or less than 3 if relatedConcepts has less than 3)
+            for (size_t i = 0; i < numTopNodes; i++) { 
+                //getting related nodes for each in relatedNodes
+                //semanticSearch returns nodes in descending order of closeness to query, so relatedNodes[0] is the node closest to query
+                auto secondLevelNodes = weaviateClient -> semanticSearch(relatedNodes[i].name, 2);
+                all_nodes.insert(all_nodes.end(), second_level.begin(), second_level.end()); //adding second level nodes to end of allNodes
+            }
+
+            //adding pinterest images to each node 
             //TODO
+            
         }
         std::vector<Node> VectorEngine::checkCache(const std::string& query) {
             //TODO
+            std::lock_guard<std::mutex> lock(cacheMutex); 
+            
+            auto result = searchCache.find(query);
+                //if the query doesn't exist in the cache, then result will be a pointer to the end of searchCache container
+
+            if (result != searchCache.end()) { //if false, them result points to searchCache.end() which means its not in cache
+                //checking if cache is valid
+                auto now = std::chrono::system_clock::now();
+                if (now - lastCacheUpdate < CACHE_EXPIRY_TIME) {
+                    //returning the value of the query key
+                    return result -> second; 
+                } else { //cache has expired
+                    searchCache.erase(result);
+                }
+            }
+            return {};
         }
         void VectorEngine::updateCache(const std::string& query, const std::vector<Node>& nodes) {
             //TODO
         }
         std::vector<Node> VectorEngine::enhanceWithPinterestData(std::vector<Node> nodes) {
-            //TODO
+            std::cout << "Enhancing " << nodes.size() << " nodes with Pinterest data" << std::endl;
+            
+            //Pinterest requests done asynchronously for better performance
+            std::vector<std::future<std::vector<PinterestImage>>> pinterestFutures;
+                //std::future allows these operations to be done without disrupting the main program
+                //returns std::vector<PinterestImage>, a lost of PinterestImage objects
+                //need to call .get() on pinterestFutures to get the result
+            for (const auto& node : nodes) {//for node in nodes
+                auto future = std::async(std::launch::async, [this, &node]() {
+                    return pinterestClient->searchPins(node.name);
+                });
+                //std::async runs the task in the background
+                //std::launch::async tells the program to launch the task in a new thread
+                //[this, &node] gives the current class and access to node by reference
+
+                pinterestFutures.push_back(std::move(future));
+            }
+
+            //getting pinterest results
+            for (size_t i = 0; i < nodes.size() && i < pinterestFutures.size(); i++) {
+                try {
+                    //each future is a bunch of pinterest images related to that node
+                    auto images = pinterestFutures[i].get();
+                    if (!images.empty()) {
+                        std::lock_guard<std::mutex> lock(cacheMutex); //preventing other threads from accessing imageCache
+                            //^locks the cacheMutex so if other threads try to lock that mutex they will be blocked until cacheMutex is unlocked by og thread
+                        imageCache[nodes[i].name] = std::move(images); //adding images to cache
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "Pinterest enhancement failed for '" << nodes[i].name << "': " << e.what() << std::endl;
+                }
+            }
+            return nodes;
         }
         void VectorEngine::clearCache() {
             //TODO

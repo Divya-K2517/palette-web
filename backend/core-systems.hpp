@@ -33,6 +33,7 @@ namespace coreSystems {
         float similarityScore; //similarity score of the node with respect to the search/center node
         std::chrono::system_clock::time_point timestamp; //timestamp of the node creation or last update
         SystemHealth healthStatus;  //health status of the node, defined in SystemHealth enum
+        int level; //0=query, 1=first level, 2=second level
         //for conversion to/from JSON for api
         nlohmann::json toJson() const;
             //function that converts the Node object to a JSON object
@@ -116,12 +117,12 @@ namespace coreSystems {
         bool isOperational; //indicates if the engine is operational
 
         //connection pools for external services w/ unique_ptr
-        std::unique_ptr<class WeaviateClient> weaviateClient_;
-        std::unique_ptr<class PinterestClient> pinterestClient_;   
+        std::unique_ptr<class WeaviateClient> weaviateClient;
+        std::unique_ptr<class PinterestClient> pinterestClient;   
 
         //local cache
-        std::unordered_map<std::string, std::vector<Node>> searchCache_;
-        std::unordered_map<std::string, std::vector<struct PinterestImage>> imageCache_;
+        std::unordered_map<std::string, std::vector<Node>> searchCache;
+        std::unordered_map<std::string, std::vector<struct PinterestImage>> imageCache;
         std::mutex cacheMutex;
 
         std::chrono::system_clock::time_point lastCacheUpdate_;
