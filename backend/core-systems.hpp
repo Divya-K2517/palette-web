@@ -125,7 +125,7 @@ namespace coreSystems {
         std::unordered_map<std::string, std::vector<struct PinterestImage>> imageCache;
         std::mutex cacheMutex;
 
-        std::chrono::system_clock::time_point lastCacheUpdate_;
+        std::chrono::system_clock::time_point lastCacheUpdate;
         static constexpr std::chrono::minutes CACHE_EXPIRY_TIME{10};
 
         //main vector search function

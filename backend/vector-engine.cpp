@@ -121,7 +121,7 @@ namespace coreSystems {
             //parsing JSON response
             try {
                 auto jsonResponse = nlohmann::json::parse(response.data);
-                return parseWeaviateResponse(jsonResponse, query, level); //TODO: write parseWeaviateResponse
+                return parseWeaviateResponse(jsonResponse, query, level); 
             } catch (const std::exception& e) {
                 std::cerr << "Failed to parse Weaviate response: " << e.what() << std::endl;
                 return {};
@@ -377,12 +377,15 @@ namespace coreSystems {
                 all_nodes.insert(all_nodes.end(), second_level.begin(), second_level.end()); //adding second level nodes to end of allNodes
             }
 
-            //adding pinterest images to each node 
-            //TODO
+            //adding pinterest images to each node (asynchronous)
+            auto enhancedNodes = enhanceWithPinterestData(std::move(allNodes));;
             
+            updateCache(query, enhancedNodes);
+            std::cout << engineType_ << " Engine: Found " << enhancedNodes.size() << " enhanced nodes" << std::endl;
+            return enhancedNodes;
+
         }
         std::vector<Node> VectorEngine::checkCache(const std::string& query) {
-            //TODO
             std::lock_guard<std::mutex> lock(cacheMutex); 
             
             auto result = searchCache.find(query);
@@ -401,7 +404,17 @@ namespace coreSystems {
             return {};
         }
         void VectorEngine::updateCache(const std::string& query, const std::vector<Node>& nodes) {
-            //TODO
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            //assiging the new nodes as the value to the key/query
+            searchCache[query] = nodes;
+            lastCacheUpdate = std::chrono::system_clock::now()
+
+            //limiting cache size
+            if (searchCache.size() > 1000) {
+                //removing the 100 oldest queries
+                auto oldest = searchCache.begin();
+                searchCache.erase(oldest, std::next(oldest, 100));
+            }
         }
         std::vector<Node> VectorEngine::enhanceWithPinterestData(std::vector<Node> nodes) {
             std::cout << "Enhancing " << nodes.size() << " nodes with Pinterest data" << std::endl;
@@ -439,9 +452,12 @@ namespace coreSystems {
             return nodes;
         }
         void VectorEngine::clearCache() {
-            //TODO
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            searchCache_.clear();
+            imageCache_.clear();
         }
         size_t VectorEngine::getCacheSize() const {
-            //TODO
+            std::lock_guard<std::mutex> lock(cacheMutex_);
+            return searchCache_.size() + imageCache_.size();
         }
     };
