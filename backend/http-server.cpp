@@ -21,21 +21,50 @@ namespace groundControl {
         
         //hangle graohQL queries
         nlohmann::json handleQuery(const nlohmann::json& request) {
-            std::cout << "handling quer request: " << request << std::endl;
+            std::cout << "graphQL handler handling query request: " << request << std::endl;
             try {
                 std::string query = request.value("query", "");
                 nlohmann::json variables = request.value("variables", nlohmann::json::object());
 
                 //parsing operation type
-                //TODO
-            } catch (const std::exception& e) {
+                if (query.find("search_concepts") != std::string::npos) {
+                    return handleSearchConcepts(variables);
+                } else if (query.find("system_health") != std::string::npos) {
+                    return handleSystemHealth();
+                } else if (query.find("pinterest_images") != std::string::npos) {
+                    return handlePinterestImages(variables);
+                } else if (query.find("telemetry_report") != std::string::npos) {
+                    return handleTelemetryReport();
+                } else {
+                    return createErrorResponse("Unknown GraphQL operation");
+                }
 
+            } catch (const std::exception& e) {
+                return createErrorResponse(std::string("Query processing error: ") + e.what());
             }
         }
-        //handle mutations
+        //handle graphql mutations
         nlohmann::json handleMutation(const nlohmann::json& request) {
-            //TODO
+            std::cout << "graphQL handler handling mutation request: " << request << std::endl;
+            try {
+                std::string query = request.value("query", "");
+                nlohmann::json variables = request.value("variables", nlohmann::json::object());
+                if (query.find("refresh_pinterest_data") != std::string::npos) {
+                    return handleRefreshPinterestData(variables);
+                } else if (query.find("emergency_restart") != std::string::npos) {
+                    return handleEmergencyRestart(variables);
+                } else if (query.find("clear_cache") != std::string::npos) {
+                    return handleClearCache();
+                } else {
+                    return createErrorResponse("Unknown GraphQL mutation");
+                }
+            } catch (const std::exception& e) {
+                return createErrorResponse(std::string("Mutation processing error: ") + e.what());
+            }
         }
+        //mutations vs queries:
+        //queries are for reading/fetching data: GET
+        //mutations modify data: POST/DELETE/PUT
     private:
         nlohmann::json handleSearchConcepts(const nlohmann::json& variables) {
             std::string searchQuery = variables.value("query", "");
@@ -113,7 +142,8 @@ namespace groundControl {
             }
 
             std::cout << "ground control, pinterest image request for " << conceptName << std::endl;
-
+            //TODO: This would typically interface with your VectorEngine's image cache
+            // For now, return a placeholder response
             nlohmann::json data = {
                 {"pinterest_images", {
                     {"concept", conceptName},
@@ -232,7 +262,160 @@ namespace groundControl {
 
                 //initialzing http server
                 server = std::make_unique<httlib::Server>();
+
+                //cors headers
+                server -> set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res){
+                    res.set_header("Access-Control-Allow-Origin", "*");
+                    res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+                    res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+                    return httplib::Server::HandlerResponse::Unhandled;
+                    //will run before every request and set these headers
+                    //returns Unhandled to let the server know to continue processing the request
+                });
+                //hanlding options requests (sent automatically by browsers before complexx requests, servers must repsond w/ cors header)
+                //server is configured to use this lambda function as the handler
+                //returns nothing bc the cors headers are set above w/ set_pre_routing_header()
+                server -> Options(".*", [](const httplib::Request&, httplib::Response& res){
+                    return;
+                });
+                //graphQL endpoint
+                server -> Post("/graphql", [this](const httplib::Request& req, httplib::Response& res){
+                    try {
+                        //converting raw http request into nlohmann::json object
+                        auto requestJson = nlohmann::json::parse(req.body); 
+
+                        nlohmann::json response; //to store graphql repsonse that will be sent to client
+                        std::string query = requestJson.value("query", ""); //getting the query
+                        //query vs mutation handling
+                        if (query.find("mutation") != std::string::npos) {
+                            response = graphqlHandler->handleMutation(requestJson);
+                        } else {
+                            response = graphqlHandler->handleQuery(requestJson);
+                        }
+                        res.set_content(response.dump(), "application/json");
+                    } catch (const exception& e) {
+                        nlohmann::json errorResponse = {
+                            {"errors", {{
+                                {"message", std::string("Server error: ") + e.what()},
+                                {"timestamp", CoreSystems::utils::getTimestampMs()}
+                            }}}
+                        };
+                        res.set_content(errorResponse.dump(), "application/json");
+                        res.status = 500;
+                    }
+                });
+                //health check endpoint
+                server -> Get("/health", [this](const httplib::Request&, httplib::Response& res){
+                    try {
+                        auto health = systemManager->getSystemHealth();
+                        nlohmann::json healthResponse = {
+                            {"status", "ok"},
+                            {"health", health.toJson()},
+                            {"timestamp", CoreSystems::utils::getTimestampMs()}
+                        };
+                        res.set_content(healthResponse.dump(), "application/json");
+                    } catch (const std::exception& e) {
+                        nlohmann::json errorResponse = {
+                            {"status", "error"},
+                            {"message", e.what()},
+                            {"timestamp", CoreSystems::utils::getTimestampMs()}
+                        };
+                        res.set_content(errorResponse.dump(), "application/json");
+                        res.status = 500;
+                    }
+                });
+                // Static file serving for React frontend (optional)
+                server->set_mount_point("/", "./public");
+
+                std::cout << "Ground Control: HTTP Server initialized on port " << port << std::endl;
+                return true;
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to initialize HTTP Server: " << e.what() << std::endl;
+                return false;
             }
         }
+        bool start() {
+            if (isRunning.load()) {
+                //.load() checks value of isRunning & garantees this operation cant be disturbed by other threads
+                //safer than just if (isRunning)
+                std::cout << "Ground Control: Server already running" << std::endl;
+                return false;
+            }
+            isRunning.store(true);
+            //creating a new thread that starts the http server asynchronously
+            serverThread = std::thread([this]() {
+                std::cout << "Ground Control: Starting HTTP server on port " << port << std::endl;
+                std::cout << "Ground Control: GraphQL endpoint available at http://localhost:" << port << "/graphql" << std::endl;
+                std::cout << "Ground Control: Health check available at http://localhost:" << port << "/health" << std::endl;
+                
+                //server->listen() starts the server and binds to network
+                //0.0.0.0 binds the server to all network interfaces on this port
+                if (!server->listen("0.0.0.0", port)) {
+                    std::cerr << "Ground Control: Failed to start server on port " << port << std::endl;
+                    isRunning.store(false);
+                }
+                //giving server some time to start
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                
+                return (isRunning.load())l
+            });
+        }
+        void shutdown() {
+            if (!isRunning.load()) { //if already not running
+                return;
+            }
+            std::cout << "Ground Control: Shutting down HTTP server..." << std::endl;
+            
+            isRunning.store(false);
+            
+            if (server) {
+                server->stop();
+            }
+            if (serverThread.joinable()) { //.joinable() returns false if thread wasnt started or is always joined
+                serverThread.join();
+                //.join() blocks the current thread until serverThread completes and then releases thread reasources
+            }
+            if (systemManager) {
+                systemManager->shutdown();
+            }
+
+            std::cout << "Ground Control: Server shutdown complete" << std::endl;
+        }
+        bool isServerRunning() const {
+            return isRunning.load();
+        }
     };
+} //end of namespace groundControl
+
+int main() { //main function
+    std::cout << "🚀 Ground Control: Mission Control Server Starting..." << std::endl;
+    
+    GroundControl::HttpServer server(8080);
+    //initialzing + starting server
+    if (!server.initialize()) {
+        std::cerr << "❌ Ground Control: Failed to initialize server" << std::endl;
+        return 1;
+    }
+    if (!server.start()) {
+        std::cerr << "❌ Ground Control: Failed to start server" << std::endl;
+        return 1;
+    }
+    std::cout << "✅ Ground Control: Mission Control is GO for launch!" << std::endl;
+    std::cout << "   GraphQL Playground: http://localhost:8080/graphql" << std::endl;
+    std::cout << "   System Health: http://localhost:8080/health" << std::endl;
+
+    //keeps server running until interrupted
+    std::signal (SIGINT. [](int) {
+        //SIGINT signal is generated by doing ctrl+C in terminal
+        //exit(0) will termination the program
+        std::cout << "\n🛑 Ground Control: Mission abort signal received..." << std::endl;
+        exit(0);
+    });
+    //keeping main thread alive
+    while (server.isServerRunning()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        //checks every second if server is running
+    }
+    
+    return 0;
 }
