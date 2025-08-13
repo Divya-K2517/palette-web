@@ -1,5 +1,5 @@
 //VectorEngine does the vector search(communicating with weaviate), cahches results, and handles images
-#include "coreSystems/core-systems.hpp"
+#include "CoreSystems/core-systems.hpp"
 #include <iostream>
 #include <curl/curl.h>
 #include <eigen3/Eigen/Dense>
@@ -8,7 +8,7 @@
 #include <sstream>
 #include <cstdlib> //for std::getenv
 
-namespace coreSystems { 
+namespace CoreSystems { 
     struct pinterestImage {
         std::string id;
         std::string url;

@@ -18,7 +18,7 @@
 //class TelemetryProcessor keeps track of performance data and will help detect slowness or bugs
 //SystemHealth gives an overview of the system health
 
-namespace coreSystems {
+namespace CoreSystems {
 
     enum class SystemHealth {
     NOMINAL,    // All systems green
@@ -183,4 +183,4 @@ namespace coreSystems {
             }
         };  
     } //end of namespace utils   
-} //end of namespace core_systems
+} //end of namespace CoreSystems
