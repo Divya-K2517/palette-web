@@ -237,7 +237,7 @@ namespace groundControl {
     };
     class HttpServer{
     private:
-        std::unique_ptr<httplip::Server> server;
+        std::unique_ptr<httplib::Server> server;
         std::unique_ptr<GraphQLHandler> graphqlHandler;
         std::shared_ptr<CoreSystems::SystemManager> systemManager;
         std::atomic<bool> isRunning{false};

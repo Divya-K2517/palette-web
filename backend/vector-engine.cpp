@@ -7,6 +7,8 @@
 #include <future>
 #include <sstream>
 #include <cstdlib> //for std::getenv
+#include <sys/resource.h>
+#include <fstream>
 
 namespace CoreSystems { 
     struct pinterestImage {
@@ -222,6 +224,10 @@ namespace CoreSystems {
             }
             return requestsMade < MAX_REQUESTS_PER_DAY; //returning true if requests made is less than max allowed
         }
+        uint32_t getRemainingRequests() { //requests left that can be made today
+            std::lock_guard<std::mutex> lock(rateLimitMutex);
+            return MAX_REQUESTS_PER_DAY - requestsMade.load(); 
+        }
 
         std::vector<pinterestImage> searchPins (const std::string& query) { //makes request to pinterest for pins
             if (!canMakeRequest()) {
@@ -291,10 +297,13 @@ namespace CoreSystems {
                     image.id = item.value("id", "");
                     image.description = item.value("description", "");
                     //getting url
-                    if (item.contains("media") && item["media"].contains("images") && item["media"]["images"].contains("url")) {
-                        //TODO:
-                        //item["media"]["images"].contains("url") - might need to check if images contains "original", urls possibly stored there
-                        image.url = item["media"]["images"]["url"].value("url", "");
+                    if (item.contains("media") && item["media"].contains("images")) {
+                        //trying different possible URL locations
+                        if (item["media"]["images"].contains("originals") && item["media"]["images"]["originals"].contains("url")) {
+                            image.url = item["media"]["images"]["originals"]["url"];
+                        } else if (item["media"]["images"].contains("url")) {
+                            image.url = item["media"]["images"]["url"];
+                        }
                     }
                     //getting board name (idt there will be one most times)
                     if (item.contains("board") && item["board"].contains("name")) {
@@ -312,7 +321,6 @@ namespace CoreSystems {
         VectorEngine::VectorEngine(const std::string& engineType) //engine type is "primary" or "backup"
             : engineId(utils::generateUUID()), //setting up vector engine member variables
             engineType(engineType),
-            isOperational(false),
             lastCacheUpdate(std::chrono::system_clock::now()) {
         }
 
@@ -322,7 +330,15 @@ namespace CoreSystems {
         bool VectorEngine::initialize() {
             try { //initializing weaviate and pinterest clients
                 std::string weaviateUrl = (engineType == "primary") ? "http://localhost:8080" : "http://backup-weaviate:8080";
-                weaviateClient = std::make_unique<WeaviateClient>(weaviateUrl);
+                
+                //getting weaviate api key from environment variable
+                std::string weaviateApiKey = std::getenv("WEAVIATE_API_KEY") ? 
+                    std::getenv("WEAVIATE_API_KEY") : "";
+                if (weaviateApiKey.empty() || weaviateApiKey == "") {
+                    std::cerr << "WEAVIATE_API_KEY is not set" << std::endl;
+                }
+
+                weaviateClient = std::make_unique<WeaviateClient>(weaviateUrl, weaviateApiKey);
                     //std::make_unique returns a std::unique_ptr<WeaviateClient>
                     //this object will be deleted when unique_ptr goes out of scope (vector engine objecft is deleted or weaviateClient is reset/gets new pointer)
                     //prevents memory leacks
@@ -334,7 +350,7 @@ namespace CoreSystems {
                 pinterestClient = std::make_unique<PinterestClient>(pinterestApiKey);
                     //weaviateClient and pinterestClient are pointers bc of std::make_unique
                     //they point to the address of the new WeaviateClient/PinterestClient object
-                isOperational = true;
+                isOperational.store(true);
                 std::cout << engineType << " Vector Engine initialized: " << engineId << std::endl;
 
                 return true;
@@ -460,4 +476,170 @@ namespace CoreSystems {
             std::lock_guard<std::mutex> lock(cacheMutex_);
             return searchCache_.size() + imageCache_.size();
         }
+
+        std::vector<pinterestImage> VectorEngine::getPinterestImages(const std::string& conceptName) const {
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            auto it = imageCache.find(conceptName);
+            if (it != imageCache.end()) { //if conceptName is in the cache
+                return it->second; //returning the vector of pinterest images for that concept
+            }
+            return {};
+        }
+        bool VectorEngine::refreshPinterestData(const std::string& conceptName) {
+            try {
+                if (conceptName.empty()) {
+                    //clearing entire pinterest cache
+                    std::lock_guard<std::mutex> lock(cacheMutex);
+                    imageCache.clear();
+                    std::cout << "All Pinterest image cache cleared" << std::endl;
+                    return true;
+                } else {
+                    //removing concept from cache then fetching fresh data
+                    {
+                        std::lock_guard<std::mutex> lock(cacheMutex);
+                        imageCache.erase(conceptName);
+                    }
+                    //fetching fresh Pinterest data
+                    if (pinterestClient && pinterestClient->canMakeRequest()) {
+                        auto images = pinterestClient->searchPins(conceptName);
+                        if (!images.empty()) {
+                            std::lock_guard<std::mutex> lock(cacheMutex);
+                            imageCache[conceptName] = std::move(images);
+                            std::cout << "Pinterest data refreshed for: " << conceptName << std::endl;
+                            return true;
+                        }
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to refresh Pinterest data: " << e.what() << std::endl;
+            }
+            return false;
+        }
+
+        //system manager functions
+        SystemManager::SystemManager() : startTime(std::chrono::system_clock::now()) {
+            healthMetrics = std::make_unique<SystemHealthMetrics>();
+        }
+        SystemManager::~SystemManager() {
+            shutdown();
+        }
+        bool SystemManager::initialize() {
+            try {
+                //initializing telemetry processor
+                telemetryProcessor = std::make_unique<TelemetryProcessor>();
+                telemetryProcessor->start();
+
+                //initializing vector engines
+                primaryVectorEngine = std::make_unique<VectorEngine>("primary");
+                backupVectorEngine = std::make_unique<VectorEngine>("backup");
+
+                if (!primaryVectorEngine->initialize()) {
+                    std::cerr << "Failed to initialize primary vector engine" << std::endl;
+                    return false;
+                }
+                if (!backupVectorEngine->initialize()) {
+                    std::cerr << "Warning: Failed to initialize backup vector engine, continuing with primary only" << std::endl;
+                }
+                //starting background threads
+                telemetryThread = std::thread([this]() { telemetryWorker(); });
+                healthMonitorThread = std::thread([this]() { healthMonitorWorker(); });
+
+                std::cout << "SystemManager initialized successfully" << std::endl;
+                return true;
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to initialize SystemManager: " << e.what() << std::endl;
+                return false;
+            }
+        }
+        void SystemManager::shutdown() {
+             std::cout << "SystemManager shutting down..." << std::endl;
+
+             shutdownRequested.store(true);
+             //stop telemetry processor
+            if (telemetryProcessor) {
+                telemetryProcessor->stop();
+            }
+            
+            //shutdown vector engines
+            if (primaryVectorEngine) {
+                primaryVectorEngine->shutdown();
+            }
+            if (backupVectorEngine) {
+                backupVectorEngine->shutdown();
+            }
+            //join threads
+            //joining threads will make the thread that called it wait until the thread being joined finishes execution
+            //then the thread that was called on its reasources are freed
+
+            if (telemetryThread.joinable()) {
+                telemetryThread.join();
+            }
+            if (healthMonitorThread.joinable()) {
+                healthMonitorThread.join();
+            }
+            std::cout << "SystemManager shutdown complete" << std::endl;
+        }
+        std::vector<Node> SystemManager::vectorSearch(const std::string& query) {
+            std::cout << "SystemManager: Processing search for '" << query << "'" << std::endl;
+
+            try {
+                //try searching w/ primary engine first
+                if (primaryVectorEngine && primaryVectorEngine->isEngineOperational()) {
+                    return primaryVectorEngine->vectorSearch(query);
+                }
+                //fallback to backup engine
+                else if (backupVectorEngine && backupVectorEngine->isEngineOperational()) {
+                    std::cout << "Primary engine unavailable, using backup" << std::endl;
+                    return backupVectorEngine->vectorSearch(query);
+                }
+                else {
+                    throw std::runtime_error("No operational vector engines available");
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Search failed: " << e.what() << std::endl;
+                healthMetrics->errorRate.store(healthMetrics->errorRate.load() + 0.01f);
+                return {};
+            }
+        }
+        SystemHealthMetrics SystemManager::getSystemHealth() const {
+            return *healthMetrics;
+        }
+        void SystemManager::recordTelemetry(const SearchTelemetry& telemetry) {
+            std::lock_guard<std::mutex> lock(telemetryMutex);
+            telemetryQueue.push(telemetry); //adding data to queue
+            telemetryCv.notify_one();
+            //notify_one() tells the telemetryWorker thread that new data is available
+            //if the thread is waiting, it will wake up and process the new data
+
+        }
+        bool SystemManager::emergencySubsystemRestart(const std::string& subsystemName) {
+            std::cout << "System Manager: EMERGENCY RESTART: " << subsystemName << std::endl;
+            try {
+                 if (subsystemName == "primary" || subsystemName == "primary_engine") {
+                    if (primaryVectorEngine) {
+                        primaryVectorEngine->shutdown();
+                        return primaryVectorEngine->initialize();
+                    }
+                } else if (subsystemName == "backup" || subsystemName == "backup_engine") {
+                    if (backupVectorEngine) {
+                        backupVectorEngine->shutdown();
+                        return backupVectorEngine->initialize();
+                    }
+                } else if (subsystemName == "telemetry") {
+                    if (telemetryProcessor) {
+                        telemetryProcessor->stop();
+                        telemetryProcessor->start();
+                        return true;
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "System Manager: Failed to emergency restart subsystem '" << subsystemName << "': " << e.what() << std::endl;
+            }
+            return false;
+        }
+        uint64_t SystemManager::getUptimeMs() const {
+            auto now = std::chrono::system_clock::now();
+            return std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
+        }
+
     };

@@ -35,13 +35,35 @@ namespace CoreSystems {
         SystemHealth healthStatus;  //health status of the node, defined in SystemHealth enum
         int level; //0=query, 1=first level, 2=second level
         //for conversion to/from JSON for api
-        nlohmann::json toJson() const;
+        nlohmann::json toJson() const{
             //function that converts the Node object to a JSON object
-
-        static Node fromJson(const nlohmann::json& j);
+            return nlohmann::json{
+                {"id", id},
+                {"name", name},
+                {"embedding", embedding},
+                {"similarityScore", similarityScore},
+                {"timestamp", std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch()).count()},
+                {"healthStatus", static_cast<int>(healthStatus)},
+                {"level", level}
+            };
+        }
+        static Node fromJson(const nlohmann::json& j) {
             //static method that belongs to the class, not an instance of the class
             //returns a Node object
             //takes in a reference to a JSON object
+            Node node;
+            node.id = j.value("id", "");
+            node.name = j.value("name", "");
+            node.embedding = j.value("embedding", std::vector<float>{});
+            node.similarityScore = j.value("similarityScore", 0.0f);
+            node.healthStatus = static_cast<SystemHealth>(j.value("healthStatus", 0));
+            node.level = j.value("level", 0);
+            
+            auto timestamp_ms = j.value("timestamp", 0L);
+            node.timestamp = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestamp_ms));
+            
+            return node;
+        }
     }
 
     struct SearchTelemetry { //will be used to track each search and its stats
@@ -50,7 +72,15 @@ namespace CoreSystems {
         uint64_t processingTime; //processing time in milliseconds
         size_t nodesFound; //number of nodes found in the search
         std::chrono::system_clock::time_point timestamp; //time the search finished
-        nlohmann::json toJson() const;
+        nlohmann::json toJson() const {
+            return nlohmann::json{
+                {"searchId", searchId},
+                {"searchPhrase", searchPhrase},
+                {"processingTime", processingTime},
+                {"nodesFound", nodesFound},
+                {"timestamp", std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch()).count()}
+            };
+        }
     }
 
     struct SystemHealth { //will be used to track system health and performance 
@@ -61,8 +91,29 @@ namespace CoreSystems {
         std::atomic<float> errorRate{0.0f};
             // Atomic variables for thread-safe operations on a single variable
             //will ensure that operations on shared variables are indivisible, preventing race conditions
-        SystemHealth getHealthStatus() const;
-        nlohmann::json toJson() const;
+        SystemHealth getHealthStatus() const {
+            float cpu = cpuUsage.load();
+            float memory = memoryUsage.load();
+            float errors = errorRate.load();
+            
+            if (cpu > 90.0f || memory > 90.0f || errors > 0.1f) {
+                return SystemHealth::CRITICAL;
+            } else if (cpu > 70.0f || memory > 70.0f || errors > 0.05f) {
+                return SystemHealth::DEGRADED;
+            } else {
+                return SystemHealth::NOMINAL;
+            }
+        }
+        nlohmann::json toJson() const {
+            return nlohmann::json{
+                {"cpuUsage", cpuUsage.load()},
+                {"memoryUsage", memoryUsage.load()},
+                {"activeConnections", activeConnections.load()},
+                {"lastHeartbeat", lastHeartbeat.load()},
+                {"errorRate", errorRate.load()},
+                {"healthStatus", static_cast<int>(getHealthStatus())}
+            };
+        }
     }
 
     //forward declarations
@@ -93,6 +144,7 @@ namespace CoreSystems {
         //background threads
         std::thread telemetryThread;
         std::thread healthMonitorThread;
+        std::chrono::system_clock::time_point startTime;
         //functions that will run each background thread
         void telemetryWorker();
         void healthMonitorWorker();
@@ -109,12 +161,18 @@ namespace CoreSystems {
         SystemHealth getSystemHealth() const; //no parameters
         void recordTelemetry(const SearchTelemetry& telemetry); 
         bool emergencySubsystemRestart(const std::string& subsystem_name);
+
+        VectorEngine* getPrimaryVectorEngine() const { return primaryVectorEngine.get(); }
+        VectorEngine* getBackupVectorEngine() const { return backupVectorEngine.get(); }
+        TelemetryProcessor* getTelemetryProcessor() const { return telemetryProcessor.get(); }
+        uint64_t getUptimeMs() const;
+            //asterisks indicate that the method returns a pointer to a VectorEngine/TelemetryProcessor object
     };
     class VectorEngine { //deals with weaviate/pinterest, caches results and handles images
     private:
         std::string engineId;
         std::string engineType; //"primary" or "backup"
-        bool isOperational; //indicates if the engine is operational
+        std::atomic<bool> isOperational {false}; //indicates if the engine is operational
 
         //connection pools for external services w/ unique_ptr
         std::unique_ptr<class WeaviateClient> weaviateClient;
@@ -133,19 +191,44 @@ namespace CoreSystems {
         bool isOperational() const {
             return isOperational;
         }
+
+    public:
+        VectorEngine(const std::string& engineType); //constructor
+        ~VectorEngine(); //destructor
+
+        bool initialize(); //initializes the engine
+        void shutdown(); //shuts down the engine
+        //main vector search function
+        std::vector<Node> vectorSearch(const std::string& query);
+        bool isEngineOperational() const {
+            return isOperational.load();
+        }
         //cache related
+        std::vector<Node> checkCache(const std::string& query);
+        void updateCache(const std::string& query, const std::vector<Node>& nodes);
+        std::vector<Node> enhanceWithPinterestData(std::vector<Node> nodes); //adding images from pinterest to nodes
         void clearCache();
         size_t getCacheSize() const;
+
+        //pinterest image access
+        std::vector<struct pinterestImage> getPinterestImages(const std::string& conceptName) const;
+        bool refreshPinterestData(const std::string& conceptName = "");
     };
     class TelemetryProcessor { 
         //for stats and analytics
     private:
         std::atomic<bool> isRunning{false};
             //atomic types make operations on them indivisible, preventing race conditions
-        std::mutex processingMutex;
+        mutable std::mutex processingMutex;
+            //mutable allows the mutex to be modified even in const methods
         
         std::vector<SearchTelemetry> telemeteryHistory;
         static constexpr size_t MAX_TELEMETRY_RECORDS = 10000;
+
+        //performance tracking
+        std::atomic<size_t> totalQueries{0};
+        std::atomic<uint64_t> totalResponseTime{0};
+        std::atomic<size_t> totalErrors{0};
     public:
         TelemetryProcessor() = default;
         ~TelemetryProcessor() = default;
@@ -155,10 +238,20 @@ namespace CoreSystems {
 
         void processTelemetry(const SearchTelemetry& telemetry);
 
-        // Analytics functions
-        float getAverageResponseTime() const;
-        float getErrorRate() const;
-        size_t getTotalQueries() const;
+        // Analytics functions - implemented
+        float getAverageResponseTime() const {
+            size_t queries = totalQueries.load();
+            if (queries == 0) return 0.0f;
+            return static_cast<float>(totalResponseTime.load()) / static_cast<float>(queries);
+        }
+        float getErrorRate() const {
+            size_t queries = totalQueries.load();
+            if (queries == 0) return 0.0f;
+            return static_cast<float>(totalErrors.load()) / static_cast<float>(queries);
+        }
+        size_t getTotalQueries() const {
+            return totalQueries.load();
+        }
         
         nlohmann::json getPerformanceReport() const;
     };
@@ -179,7 +272,7 @@ namespace CoreSystems {
                 //function to calc time elapses from startTime to now
                 auto endTime = std::chrono::high_resolution_clock::now();
                 return std::chrono::duration_cast<std::chrono::milliseconds>(
-                    end_time - start_time_).count();
+                    endTime - startTime).count();
             }
         };  
     } //end of namespace utils   
