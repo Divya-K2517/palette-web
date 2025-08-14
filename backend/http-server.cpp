@@ -12,7 +12,7 @@ namespace groundControl {
         //pointer variable coreSystems to manage a SystemManager object
         //shared_ptr gives shared ownership and lets multiple pointers point to the same object
         //object deleted when shared_ptr goes out of scope and other shared_ptrs refering to the same object are destroyed
-        std::shared_ptr<CoreSystems::SytemManager> systemManager;
+        std::shared_ptr<CoreSystems::SystemManager> systemManager;
     public:
         //constructor
         explicit GraphQLHandler(std::shared_ptr<CoreSystems::SystemManager> sm) 
@@ -127,6 +127,8 @@ namespace groundControl {
                         {"timestamp", CoreSystems::utils::getTimestampMs()},
                         //{"uptime_ms", CoreSystems::utils::getTimestampMs()},
                         {"version", "1.0.0"}
+                        {"primary_engine_operational", systemManager->getPrimaryVectorEngine() ? systemManager->getPrimaryVectorEngine()->isEngineOperational() : false},
+                        {"backup_engine_operational", systemManager->getBackupVectorEngine() ? systemManager->getBackupVectorEngine()->isEngineOperational() : false}
                     }}
                 };
 
@@ -142,50 +144,110 @@ namespace groundControl {
             }
 
             std::cout << "ground control, pinterest image request for " << conceptName << std::endl;
-            //TODO: This would typically interface with your VectorEngine's image cache
-            // For now, return a placeholder response
-            nlohmann::json data = {
-                {"pinterest_images", {
-                    {"concept", conceptName},
-                    {"images", nlohmann::json::array()},
-                    {"cached", true},
-                    {"timestamp", CoreSystems::utils::getTimestampMs()}
-                }}
-            };
+            try {
+                std::vector<CoreSystems::pinterestImage> images;
+                //get images from vector engine cache
+                if (systemManager->getPrimaryVectorEngine() && systemManager->getPrimaryVectorEngine()->isEngineOperational()) {
+                    images = systemManager->getPrimaryVectorEngine()->getPinterestImages(conceptName);
+                }
+                //converting images to json and adding to array
+                nlohmann::json imageArray = nlohmann::json::array();
+                for (const auto& img : images) {
+                    imageArray.push_back(img.toJson());
+                }
 
-            return {{"data", ""}};
+                nlohmann::json data = {
+                    {"pinterest_images", {
+                        {"concept", conceptName},
+                        {"images", imageArray},
+                        {"cached", !images.empty()},
+                        {"count", images.size()},
+                        {"timestamp", CoreSystems::utils::getTimestampMs()}
+                    }}
+                };
+                return {{"data", data}};
+
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to initialize HTTP Server: " << e.what() << std::endl;
+                return false;
+            }
+            
+            
+            // //TODO: This would typically interface with your VectorEngine's image cache
+            // // For now, return a placeholder response
+            // nlohmann::json data = {
+            //     {"pinterest_images", {
+            //         {"concept", conceptName},
+            //         {"images", nlohmann::json::array()},
+            //         {"cached", true},
+            //         {"timestamp", CoreSystems::utils::getTimestampMs()}
+            //     }}
+            // };
+
+            // return {{"data", ""}};
         }
         nlohmann::json handleTelemetryReport() {
             std::cout << "Ground Control: Telemetry report requested" << std::endl;
+            try{
+                auto telemetryProcessor = systemManager->getTelemetryProcessor();
+                if (telemetryProcessor) {
+                    auto report = telemetryProcessor->getPerformanceReport();
 
-            //TODO: interface w/ Telemetry Processor
-            nlohmann::json data = {
-                {"telemetry_report", {
-                    {"total_queries", 0}, // Would get from TelemetryProcessor
-                    {"average_response_time", 0.0}, // Would get from TelemetryProcessor
-                    {"error_rate", 0.0}, // Would get from TelemetryProcessor
-                    {"cache_hit_rate", 0.0},
-                    {"timestamp", CoreSystems::utils::getTimestampMs()}
-                }}
-            };
+                    nlohmann::json data = {
+                        {"telemetry_report", report}
+                    };
+                    return {{"data", data}};
+                } else {
+                    return createErrorResponse("Telemetry processor not available");
+                }
+            }catch (const std::exception& e) {
+                return createErrorResponse(std::string("Telemetry report error: ") + e.what());
+            }
+            // //TODO: interface w/ Telemetry Processor
+            // nlohmann::json data = {
+            //     {"telemetry_report", {
+            //         {"total_queries", 0}, // Would get from TelemetryProcessor
+            //         {"average_response_time", 0.0}, // Would get from TelemetryProcessor
+            //         {"error_rate", 0.0}, // Would get from TelemetryProcessor
+            //         {"cache_hit_rate", 0.0},
+            //         {"timestamp", CoreSystems::utils::getTimestampMs()}
+            //     }}
+            // };
             
-            return {{"data", data}};
+            // return {{"data", data}};
         }
         nlohmann::json handleRefreshPinterestData(const nlohmann::json& variables) {
            std::string conceptName = variables.value("concept", "");
            std::cout << "Ground Control: Pinterest data refresh for '" << conceptName << "'" << std::endl;
 
-           //TODO: This would trigger a refresh of Pinterest data
-            nlohmann::json data = {
-                {"refresh_pinterest_data", {
-                    {"concept", conceptName},
-                    {"success", true},
-                    {"message", "Pinterest data refresh initiated"},
-                    {"timestamp", CoreSystems::utils::getTimestampMs()}
-                }}
-            };
+           try {
+                bool success = false;
+                if (systemManager->getPrimaryVectorEngine() && systemManager->getPrimaryVectorEngine()->isEngineOperational()) {
+                    success = systemManager->getPrimaryVectorEngine()->refreshPinterestData(conceptName);
+                }
+                nlohmann::json data = {
+                    {"refresh_pinterest_data", {
+                        {"concept", conceptName},
+                        {"success", success},
+                        {"message", success ? "Pinterest data refresh successful" : "Pinterest data refresh failed"},
+                        {"timestamp", CoreSystems::utils::getTimestampMs()}
+                    }}
+                };
+                return {{"data", data}};
+           } catch (const std::exception& e) {
+                return createErrorResponse(std::string("Pinterest data refresh error: ") + e.what());
+           }
+        //    //TODO: This would trigger a refresh of Pinterest data
+        //     nlohmann::json data = {
+        //         {"refresh_pinterest_data", {
+        //             {"concept", conceptName},
+        //             {"success", true},
+        //             {"message", "Pinterest data refresh initiated"},
+        //             {"timestamp", CoreSystems::utils::getTimestampMs()}
+        //         }}
+        //     };
             
-            return {{"data", data}};
+        //     return {{"data", data}};
 
         }
         nlohmann::json handleEmergencyRestart(const nlohmann::json& variables) {
@@ -215,16 +277,39 @@ namespace groundControl {
         nlohmann::json handleClearCache() {
             std::cout << "Ground Control: Cache clear requested" << std::endl;
             
-            //TODO: This would clear the VectorEngine caches
-            nlohmann::json data = {
-                {"clear_cache", {
-                    {"success", true},
-                    {"message", "Cache cleared successfully"},
-                    {"timestamp", CoreSystems::utils::getTimestampMs()}
-                }}
-            };
+            try {
+                bool success = false;
+                //clearing cache of both engines if they are operational
+                if (systemManager->getPrimaryVectorEngine() && systemManager->getPrimaryVectorEngine()->isEngineOperational()) {
+                    systemManager->getPrimaryVectorEngine()->clearCache();
+                    success = true;
+                }
+                if (systemManager->getBackupVectorEngine() && systemManager->getBackupVectorEngine()->isEngineOperational()) {
+                    systemManager->getBackupVectorEngine()->clearCache();
+                }
+                nlohmann::json data = {
+                    {"clear_cache", {
+                        {"success", success},
+                        {"message", success ? "Cache cleared successfully" : "Failed to clear cache"},
+                        {"timestamp", CoreSystems::utils::getTimestampMs()}
+                    }}
+                };
+                
+                return {{"data", data}};
+
+            } catch (const std::exception& e) {
+                return createErrorResponse(std::string("Cache clear error: ") + e.what());
+            }
+            // //TODO: This would clear the VectorEngine caches
+            // nlohmann::json data = {
+            //     {"clear_cache", {
+            //         {"success", true},
+            //         {"message", "Cache cleared successfully"},
+            //         {"timestamp", CoreSystems::utils::getTimestampMs()}
+            //     }}
+            // };
             
-            return {{"data", data}};
+            // return {{"data", data}};
         }
         nlohmann::json createErrorResponse(const std::string& message) {
             return {
@@ -261,7 +346,7 @@ namespace groundControl {
                 graphqlHandler = std::make_unique<GraphQLHandler>(systemManager);
 
                 //initialzing http server
-                server = std::make_unique<httlib::Server>();
+                server = std::make_unique<httplib::Server>();
 
                 //cors headers
                 server -> set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res){
@@ -387,16 +472,28 @@ namespace groundControl {
     };
 } //end of namespace groundControl
 
+// Global server instance for signal handling
+std::unique_ptr<GroundControl::HttpServer> globalServer;
+
+void signalHandler(int signal) {
+    std::cout << "\n🛑 Ground Control: Mission abort signal received..." << std::endl;
+    if (globalServer) {
+        globalServer->shutdown();
+    }
+    exit(0);
+}
+
 int main() { //main function
     std::cout << "🚀 Ground Control: Mission Control Server Starting..." << std::endl;
     
-    GroundControl::HttpServer server(8080);
+    globalServer = std::make_unique<GroundControl::HttpServer>(8080);
+
     //initialzing + starting server
-    if (!server.initialize()) {
+    if (!globalServer->initialize()) {
         std::cerr << "❌ Ground Control: Failed to initialize server" << std::endl;
         return 1;
     }
-    if (!server.start()) {
+    if (!globalServer->start()) {
         std::cerr << "❌ Ground Control: Failed to start server" << std::endl;
         return 1;
     }
@@ -405,14 +502,12 @@ int main() { //main function
     std::cout << "   System Health: http://localhost:8080/health" << std::endl;
 
     //keeps server running until interrupted
-    std::signal (SIGINT. [](int) {
+    std::signal (SIGINT, signalHandler); 
         //SIGINT signal is generated by doing ctrl+C in terminal
         //exit(0) will termination the program
-        std::cout << "\n🛑 Ground Control: Mission abort signal received..." << std::endl;
-        exit(0);
-    });
+
     //keeping main thread alive
-    while (server.isServerRunning()) {
+    while (globalServer->isServerRunning()) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         //checks every second if server is running
     }

@@ -641,5 +641,111 @@ namespace CoreSystems {
             auto now = std::chrono::system_clock::now();
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
         }
+        void SystemManager::telemetryWorker() {
+            std::cout << "Ssystem Manager: Telemetry worker started" << std::endl;
+            while(!shutdownRequested.load()) { //goes until shutdownRequested
+                std::unique_lock<std::mutex> lock(telemetryMutex);
+                telemetryCv.wait(lock, [this]() { return !telemetryQueue.empty() || shutdownRequested.load(); });
+                    //thread will wait until either telemetryQueue is not empty or shutdownRequested is true
 
+                while (!telemetryQueue.empty()) {
+                    auto telemetry = telemetryQueue.front(); //getting the front of the queue
+                    telemetryQueue.pop(); //removing the front of the queue
+                    lock.unlock(); //unlocking the mutex so other threads can access telemetryQueue
+                    if (telemetryProcessor) {
+                        telemetryProcessor->processTelemetry(telemetry);
+                    }
+                    lock.lock(); //locking the mutex again
+                }
+            }
+        }
+        void SystemManager::healthMonitorWorker() {
+            while(!shutdownRequested.load()) {
+                try{
+                    healthUpdates->cpuUsage.store(utils::calculateSystemLoad());
+                        //calculateSystemLoad() calculates how busy the cpu is
+                    struct rusage useage;
+                        //rusage is a struct that contains resource usage information
+
+                    if (getrusage(RUSAGE_SELF, &useage) == 0) { //gets useage info for current program
+                        //getrusage() returns 0 on success, -1 on error
+                        float memoryMB = usage.ru_maxrss / 1024.0f; //KB to MB
+                        healthMetrics->memoryUsage.store(memoryMB);
+                    }
+                    healthMetrics->lastHeartbeat.store(utils::getTimestampMs());
+                }catch (const std::exception& e) {
+                    std::cerr << "Health monitor worker error: " << e.what() << std::endl;
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(5)); //sleep for 5 seconds before next update
+            }
+        }
+        void TelemetryProcessor::start() {
+            isRunning.store(true);
+            std::cout << "TelemetryProcessor started" << std::endl;
+        }
+        void TelemetryProcessor::stop() {
+            isRunning.store(false);
+            std::cout << "TelemetryProcessor stopped" << std::endl;
+        }
+        void TelemetryProcessor::processTelemetry(const SearchTelemetry& telemetry) {
+            if (!isRunning.load()) return; //if not running, do nothing
+
+            std::lock_guard<std::mutex> lock(processingMutex);
+
+            totalQueries.fetch_add(1);
+            totalResponseTime.fetch_add(telemetry.responseTimeMs);
+
+            if (telemetryHistory.size() >= MAX_TELEMETRY_RECORDS) {
+                telemetryHistory.erase(telemetryHistory.begin());
+                //removing the oldest record if we have reached the max size
+            }
+            telemetryHistory.push_back(telemetry); //adding new telemetry record to history
+            std::cout << "Telemetry processed: " << telemetry.searchPhrase << " in " 
+                      << telemetry.responseTimeMs << "ms" << std::endl;
+        }
+        nlohmann::json TelemetryProcessor::getPerformanceReport() const {
+            std::lock_guard<std::mutex> lock(processingMutex);
+
+            return nlohmann::json{
+                {"total_queries", getTotalQueries()},
+                {"average_response_time", getAverageResponseTime()},
+                {"error_rate", getErrorRate()},
+                {"telemetry_records", telemetryHistory.size()},
+                {"timestamp", utils::getTimestampMs()}
+
+            };
+        }
+        //utils implementations
+        namespace utils {
+            std::string generateUUID() {
+                uuid_t uuid;
+                uuid_generate_random(uuid); //generates a random UUID
+                char uuidStr[37]; //UUIDs are 36 characters + null terminator
+                uuid_unparse(uuid, uuidStr); //converts UUID to string
+                return std::string(uuidStr); //returning the UUID as a string
+            }
+            std::chrono::system_clock::time_point getCurrentTime() {
+                return std::chrono::system_clock::now(); //returns current time as a time_point
+            }
+            uint64_t getTimestampMs() {
+                return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+                //std::chrono::system_clock::now() gets current time
+                //.time_since_epoch() gets time since epoch (1970-01-01 00:00:00 UTC)
+                //std::chrono::duration_cast<std::chrono::milliseconds>() converts it to milliseconds
+                //.count() returns the number of milliseconds as an integer
+            }
+            float calculateSystemLoad() {
+                std::ifstream loadavg("/proc/loadavg"); 
+                    //creates input file stream ifstream object loadavg
+                    //opens the /proc/loadavg file which contains system load averages
+                if (loadavg.is_open()) {
+                    float load;
+                    loadavg >> load;
+                    return load * 100.0f; // Convert to percentage
+                }
+                return 0.0f;
+
+            }
+        }
     };
