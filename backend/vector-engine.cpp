@@ -469,12 +469,12 @@ namespace CoreSystems {
         }
         void VectorEngine::clearCache() {
             std::lock_guard<std::mutex> lock(cacheMutex);
-            searchCache_.clear();
-            imageCache_.clear();
+            searchCache.clear();
+            imageCache.clear();
         }
         size_t VectorEngine::getCacheSize() const {
-            std::lock_guard<std::mutex> lock(cacheMutex_);
-            return searchCache_.size() + imageCache_.size();
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            return searchCache.size() + imageCache.size();
         }
 
         std::vector<pinterestImage> VectorEngine::getPinterestImages(const std::string& conceptName) const {
