@@ -4,10 +4,73 @@ import { Search, Activity, Image, BarChart3, RefreshCw, AlertTriangle } from 'lu
 const API_BASE = 'http://localhost:8080';
 //two backend endpoints are /graphql and /health
 const VectorSearchFrontend = () => {
+  interface SearchResultsType {
+    data: {
+      search_concepts: {
+        mission_id: string;
+        query: string;
+        nodes: Array<{
+          id: string;
+          name: string;
+          similarityScore: number;
+          timestamp: string;
+          healthStatus: number;
+          level: number;
+          embedding: number[];
+        }>;
+        processing_time_ms: number;
+        system_status: any;
+        pinterest_integration_status: string;
+        timestamp: number;
+      };
+    };
+  }
+  interface SystemHealthType {
+    // nlohmann::json data = {
+    //                 {"system_health", {
+    //                     {"status", healthMetrics.toJson()},
+    //                     {"timestamp", CoreSystems::utils::getTimestampMs()},
+    //                     //{"uptime_ms", CoreSystems::utils::getTimestampMs()},
+    //                     {"version", "1.0.0"}
+    //                     {"primary_engine_operational", systemManager->getPrimaryVectorEngine() ? systemManager->getPrimaryVectorEngine()->isEngineOperational() : false},
+    //                     {"backup_engine_operational", systemManager->getBackupVectorEngine() ? systemManager->getBackupVectorEngine()->isEngineOperational() : false}
+    //                 }}
+    //             };
+    data: {
+      system_health: {
+        status: number;
+        cpu_useage: number;
+        memory_usage: number;
+        active_connections: number;
+        error_rate: number;
+        
+        timestamp: number;
+        version: string;
+        primary_engine_operational: boolean;
+        backup_engine_operational: boolean;
+      };
+    };
+  }
+  interface TelemetryReportType {
+    // nlohmann::json data = {
+    //                     {"total_queries", report.total_queries},
+    //                     {"average_response_time", report.average_response_time},
+    //                     {"error_rate", report.error_rate},
+    //                     {"telemetry_records", report.telemetry_records},
+    //                     {"timestamp", report.timestamp}
+    //                 };
+    data: {
+      total_queries: number;
+      average_response_time: number;
+      error_rate: number;
+      telemetry_records: number;
+      timestamp: number;
+    };
+  }
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState(null);
-  const [systemHealth, setSystemHealth] = useState(null);
-  const [telemetryReport, setTelemetryReport] = useState(null);
+  const [searchResults, setSearchResults] = useState<SearchResultsType | null>(null);
+  const [systemHealth, setSystemHealth] = useState<SystemHealthType | null>(null);
+  const [telemetryReport, setTelemetryReport] = useState<TelemetryReportType | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -256,25 +319,25 @@ const VectorSearchFrontend = () => {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                     <div>
                       <span className="font-medium">Mission ID:</span>
-                      <div className="font-mono text-xs">{searchResults.mission_id}</div>
+                      <div className="font-mono text-xs">{searchResults.data.search_concepts.mission_id}</div>
                     </div>
                     <div>
                       <span className="font-medium">Processing Time:</span>
-                      <div>{searchResults.processing_time_ms}ms</div>
+                      <div>{searchResults.data.search_concepts.processing_time_ms}ms</div>
                     </div>
                     <div>
                       <span className="font-medium">Nodes Found:</span>
-                      <div>{searchResults.nodes.length}</div>
+                      <div>{searchResults.data.search_concepts.nodes.length}</div>
                     </div>
                     <div>
                       <span className="font-medium">Pinterest Status:</span>
-                      <div className="text-green-600">{searchResults.pinterest_integration_status}</div>
+                      <div className="text-green-600">{searchResults.data.search_concepts.pinterest_integration_status}</div>
                     </div>
                   </div>
                 </div>
 
                 <div className="space-y-3">
-                  {searchResults.nodes.map((node, index) => (
+                  {searchResults.data.search_concepts.nodes.map((node, index) => (
                     <div key={node.id} className="border border-gray-200 rounded-lg p-4">
                       <div className="flex justify-between items-start mb-2">
                         <h3 className="font-medium text-lg">{node.name}</h3>
@@ -320,37 +383,37 @@ const VectorSearchFrontend = () => {
                 <div className="space-y-3">
                   <div className="bg-gray-50 p-3 rounded">
                     <div className="text-sm font-medium mb-2">Overall Status</div>
-                    <div className={`font-bold ${getHealthStatusColor(systemHealth.status.healthStatus)}`}>
-                      {getHealthStatusText(systemHealth.status.healthStatus)}
+                    <div className={`font-bold ${getHealthStatusColor(systemHealth.data.system_health.status)}`}>
+                      {getHealthStatusText(systemHealth.data.system_health.status)}
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <div className="font-medium">CPU Usage</div>
-                      <div>{systemHealth.status.cpuUsage.toFixed(1)}%</div>
+                      <div>{systemHealth.data.system_health.cpu_useage.toFixed(1)}%</div>
                     </div>
                     <div>
                       <div className="font-medium">Memory Usage</div>
-                      <div>{systemHealth.status.memoryUsage.toFixed(1)} MB</div>
+                      <div>{systemHealth.data.system_health.memory_usage.toFixed(1)} MB</div>
                     </div>
                     <div>
                       <div className="font-medium">Active Connections</div>
-                      <div>{systemHealth.status.activeConnections}</div>
+                      <div>{systemHealth.data.system_health.active_connections}</div>
                     </div>
                     <div>
                       <div className="font-medium">Error Rate</div>
-                      <div>{(systemHealth.status.errorRate * 100).toFixed(2)}%</div>
+                      <div>{(systemHealth.data.system_health.error_rate * 100).toFixed(2)}%</div>
                     </div>
                   </div>
 
                   <div className="pt-3 border-t">
                     <div className="text-sm space-y-1">
-                      <div>Primary Engine: <span className={systemHealth.primary_engine_operational ? 'text-green-600' : 'text-red-600'}>
-                        {systemHealth.primary_engine_operational ? '✓ Online' : '✗ Offline'}
+                      <div>Primary Engine: <span className={systemHealth.data.system_health.primary_engine_operational ? 'text-green-600' : 'text-red-600'}>
+                        {systemHealth.data.system_health.primary_engine_operational ? '✓ Online' : '✗ Offline'}
                       </span></div>
-                      <div>Backup Engine: <span className={systemHealth.backup_engine_operational ? 'text-green-600' : 'text-red-600'}>
-                        {systemHealth.backup_engine_operational ? '✓ Online' : '✗ Offline'}
+                      <div>Backup Engine: <span className={systemHealth.data.system_health.backup_engine_operational ? 'text-green-600' : 'text-red-600'}>
+                        {systemHealth.data.system_health.backup_engine_operational ? '✓ Online' : '✗ Offline'}
                       </span></div>
                     </div>
                   </div>
@@ -378,19 +441,19 @@ const VectorSearchFrontend = () => {
                 <div className="space-y-3 text-sm">
                   <div>
                     <div className="font-medium">Total Queries</div>
-                    <div className="text-2xl font-bold text-blue-600">{telemetryReport.total_queries}</div>
+                    <div className="text-2xl font-bold text-blue-600">{telemetryReport.data.total_queries}</div>
                   </div>
                   <div>
                     <div className="font-medium">Avg Response Time</div>
-                    <div>{telemetryReport.average_response_time.toFixed(2)}ms</div>
+                    <div>{telemetryReport.data.average_response_time.toFixed(2)}ms</div>
                   </div>
                   <div>
                     <div className="font-medium">Error Rate</div>
-                    <div>{(telemetryReport.error_rate * 100).toFixed(2)}%</div>
+                    <div>{(telemetryReport.data.error_rate * 100).toFixed(2)}%</div>
                   </div>
                   <div>
                     <div className="font-medium">Records Stored</div>
-                    <div>{telemetryReport.telemetry_records}</div>
+                    <div>{telemetryReport.data.telemetry_records}</div>
                   </div>
                 </div>
               )}

@@ -4,6 +4,10 @@
             "name": "Win32",
             "includePath": [
                 "${workspaceFolder}/**",
+                "${workspaceFolder}/backend",
+                "${workspaceFolder}/backend/http-server/nlohmann", 
+                "${workspaceFolder}/backend/vector-engine",
+                "${workspaceFolder}include",
                 "C:/msys64/usr/include",
                 "C:/msys64/ucrt64/include"
             ],

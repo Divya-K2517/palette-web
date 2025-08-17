@@ -2,8 +2,9 @@
 #include <string>    
 #include <vector>  
 #include <chrono>  
-#include <uuid/uuid.h>         // library to generate UUIDs
-#include <nlohmann/json.hpp> 
+#include <Rpc.h>
+#pragma comment(lib, "Rpcrt4.lib")       // library to generate UUIDs
+#include "json.hpp"
 #include <queue>
 #include <mutex>
 #include <condition_variable>
@@ -20,11 +21,19 @@
 
 namespace CoreSystems {
 
-    enum class SystemHealth {
+    enum class SystemHealthEnum {
     NOMINAL,    // All systems green
     DEGRADED,   // Yellow - reduced capability  
     CRITICAL    // Red - system failure
     };
+    inline std::string systemHealthToString(SystemHealthEnum st) {
+        switch (st) {
+            case SystemHealthEnum::NOMINAL: return "NOMINAL";
+            case SystemHealthEnum::DEGRADED: return "DEGRADED";
+            case SystemHealthEnum::CRITICAL: return "CRITICAL";
+            default: return "UNKNOWN";
+        }
+    }
 
     struct Node {
         std::string id; //id for each node
@@ -64,7 +73,7 @@ namespace CoreSystems {
             
             return node;
         }
-    }
+    };
 
     struct SearchTelemetry { //will be used to track each search and its stats
         std:: string searchId; //id for the search
@@ -81,7 +90,7 @@ namespace CoreSystems {
                 {"timestamp", std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch()).count()}
             };
         }
-    }
+    };
 
     struct SystemHealth { //will be used to track system health and performance 
         std::atomic<float> cpuUsage{0.0f};
@@ -158,7 +167,8 @@ namespace CoreSystems {
         bool initialize(); 
         void shutdown(); 
         std::vector<Node> search(const std::string& query);
-        SystemHealth getSystemHealth() const; //no parameters
+        SystemHealthEnum getSystemHealth() const; //no parameters, returns a SystemHealthEnum 
+         SystemHealthMetrics SystemManager::getHealthMetrics() const;
         void recordTelemetry(const SearchTelemetry& telemetry); 
         bool emergencySubsystemRestart(const std::string& subsystem_name);
 
@@ -187,8 +197,9 @@ namespace CoreSystems {
         static constexpr std::chrono::minutes CACHE_EXPIRY_TIME{10};
 
         //main vector search function
-        std::vector<Node> vectorSearch(const std::string& query);
-        bool isOperational() const {
+        //std::vector<Node> vectorSearch(const std::string& query);
+
+        std::atomic<bool> isOperational() const {
             return isOperational;
         }
 
@@ -256,7 +267,7 @@ namespace CoreSystems {
         nlohmann::json getPerformanceReport() const;
     };
     namespace utils { 
-        std::string generateUUID(); //function to generate a UUID
+        inline std::string generateUUID(); //function to generate a UUID
         std::chrono::system_clock::time_point getCurrentTime();
         uint64_t getTimestampMs();
         float calculateSystemLoad();

@@ -1,5 +1,5 @@
 //VectorEngine does the vector search(communicating with weaviate), cahches results, and handles images
-#include "CoreSystems/core-systems.hpp"
+#include "core-systems.hpp"
 #include <iostream>
 #include <curl/curl.h>
 #include <eigen3/Eigen/Dense>
@@ -7,7 +7,14 @@
 #include <future>
 #include <sstream>
 #include <cstdlib> //for std::getenv
-#include <sys/resource.h>
+
+#ifdef _WIN32
+    #include <windows.h>
+    #include <psapi.h>
+#else 
+    #include <sys/resource.h>
+#endif
+
 #include <fstream>
 
 namespace CoreSystems { 
@@ -42,7 +49,7 @@ namespace CoreSystems {
             //when data comes back from a request it will add it to curlResponse.data
             //nmemb is number of elements
             size_t totalSize = size * nmemb;
-            response -> data.append(static_cast<char*>(contents), totalSize)
+            response -> data.append(static_cast<char*>(contents), totalSize);
                 //casting void* contents to char*
             return totalSize; //tells curl how many bytes were written
         }
@@ -67,7 +74,7 @@ namespace CoreSystems {
         //return a vector of Nodes in descending order of closeness to query (most related nodes come first)
         std::vector<Node> semanticSearch(const std::string& query, const int level) { 
             //locking curlHandle with curlMutex
-            std::lockGuard<std::mutex> lock(curlMutex);
+            std::lock_guard<std::mutex> lock(curlMutex);
             //constructing the GraphQL query
             std::stringstream graphqlQuery;
             graphqlQuery << R"({
@@ -193,7 +200,7 @@ namespace CoreSystems {
             //when data comes back from a request it will add it to curlResponse.data
             //nmemb is number of elements
             size_t totalSize = size * nmemb;
-            response -> data.append(static_cast<char*>(contents), totalSize)
+            response -> data.append(static_cast<char*>(contents), totalSize);
                 //casting void* contents to char*
             return totalSize; //tells curl how many bytes were written
         }
@@ -601,7 +608,10 @@ namespace CoreSystems {
                 return {};
             }
         }
-        SystemHealthMetrics SystemManager::getSystemHealth() const {
+        SystemHealthEnum SystemManager::getSystemHealth() const {
+            return *healthMetrics.healthStatus;
+        }
+        SystemHealthMetrics SystemManager::getHealthMetrics() const {
             return *healthMetrics;
         }
         void SystemManager::recordTelemetry(const SearchTelemetry& telemetry) {
@@ -642,7 +652,7 @@ namespace CoreSystems {
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
         }
         void SystemManager::telemetryWorker() {
-            std::cout << "Ssystem Manager: Telemetry worker started" << std::endl;
+            std::cout << "System Manager: Telemetry worker started" << std::endl;
             while(!shutdownRequested.load()) { //goes until shutdownRequested
                 std::unique_lock<std::mutex> lock(telemetryMutex);
                 telemetryCv.wait(lock, [this]() { return !telemetryQueue.empty() || shutdownRequested.load(); });
@@ -664,6 +674,14 @@ namespace CoreSystems {
                 try{
                     healthUpdates->cpuUsage.store(utils::calculateSystemLoad());
                         //calculateSystemLoad() calculates how busy the cpu is
+                    #ifdef _WIN32 //for windows
+                        PROCESS_MEMORY_COUNTERS pmc;
+                        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+                            float memoryMB = static_cast<float>(pmc.WorkingSetSize) / (1024.0f * 1024.0f);
+                            healthMetrics->memoryUsage.store(memoryMB);
+                        }
+                    
+                    #else //for linux
                     struct rusage useage;
                         //rusage is a struct that contains resource usage information
 
@@ -672,6 +690,7 @@ namespace CoreSystems {
                         float memoryMB = usage.ru_maxrss / 1024.0f; //KB to MB
                         healthMetrics->memoryUsage.store(memoryMB);
                     }
+                    #endif
                     healthMetrics->lastHeartbeat.store(utils::getTimestampMs());
                 }catch (const std::exception& e) {
                     std::cerr << "Health monitor worker error: " << e.what() << std::endl;
@@ -705,7 +724,7 @@ namespace CoreSystems {
         }
         nlohmann::json TelemetryProcessor::getPerformanceReport() const {
             std::lock_guard<std::mutex> lock(processingMutex);
-
+            //auto telemetryHistory
             return nlohmann::json{
                 {"total_queries", getTotalQueries()},
                 {"average_response_time", getAverageResponseTime()},
@@ -717,12 +736,19 @@ namespace CoreSystems {
         }
         //utils implementations
         namespace utils {
-            std::string generateUUID() {
-                uuid_t uuid;
-                uuid_generate_random(uuid); //generates a random UUID
-                char uuidStr[37]; //UUIDs are 36 characters + null terminator
-                uuid_unparse(uuid, uuidStr); //converts UUID to string
-                return std::string(uuidStr); //returning the UUID as a string
+            inline std::string generateUUID() {
+                UUID uuid;
+                UuidCreate(&uuid);
+                //convert UUID to string
+                RPC_CSTR strUuid = nullptr;
+                UuidToStringA(&uuid, &strUuid);
+
+                std::string uuidStr;
+                if (strUuid) {
+                    uuidStr = reinterpret_cast<char*>(strUuid);
+                    RpcStringFreeA(&strUuid);
+                }
+                return uuidStr;
             }
             std::chrono::system_clock::time_point getCurrentTime() {
                 return std::chrono::system_clock::now(); //returns current time as a time_point

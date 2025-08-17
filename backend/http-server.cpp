@@ -1,10 +1,11 @@
 //will take in user input from react and call search()
-#include <httplib.h>
-#include <nlohmann/json.hpp>
+#include "httplib.h"
+#include "json.hpp"
 #include <thread>
 #include <atomic>
 #include <memory>
-#include "CoreSystems/core-systems.hpp"
+#include "core-systems.hpp"
+#include "vector-engine.cpp"
 
 namespace groundControl {
     class GraphQLHandler {
@@ -74,7 +75,7 @@ namespace groundControl {
                 return createErrorResponse("search query cannot be empty");
             }
 
-            std::cout << "Ground Control: Initiating search mission for '" << search_query << "'" << std::endl;
+            std::cout << "Ground Control: Initiating search mission for '" << searchQuery << "'" << std::endl;
 
             //starting timer for performance
             CoreSystems::utils::PerformanceTimer timer;
@@ -87,7 +88,7 @@ namespace groundControl {
             }
 
             auto processingTime = timer.elapsedMs();
-            auto healthMetrics = systemManager -> getSystemHealth();
+            auto healthStatus = systemManager -> getSystemHealth();
             //record telemetry 
             CoreSystems::SearchTelemetry telemetry;
             telemetry.searchId = CoreSystems::utils::generateUUID();
@@ -104,7 +105,7 @@ namespace groundControl {
                     {"query", searchQuery},
                     {"nodes", nlohmann::json::array()},
                     {"processing_time_ms", processingTime},
-                    {"system_status", healthMetrics.toJson()},
+                    {"system_status", CoreSystems::systemHealthToString(healthStatus)},
                     {"pinterest_integration_status", "ACTIVE"},
                     {"timestamp", CoreSystems::utils::getTimestampMs()}
                 }}
@@ -119,14 +120,18 @@ namespace groundControl {
         nlohmann::json handleSystemHealth() {
             std::cout << "ground control system health check starting..." << std::endl;
             try {
-                auto healthMetrics = systemManager -> getSystemHealth();
-
+                auto healthStatus = systemManager -> getSystemHealth();
+                auto healthMetrics = systemManager -> getHealthMetrics();
                 nlohmann::json data = {
                     {"system_health", {
-                        {"status", healthMetrics.toJson()},
+                        {"status", CoreSystems::systemHealthToString(healthStatus)},
+                        {"cpu_useage", healthMetrics.cpuUsage.load()},
+                        {"memory_usage", healthMetrics.memoryUsage.load()},
                         {"timestamp", CoreSystems::utils::getTimestampMs()},
+                        {"active_connections", healthMetrics.activeConnections.load()},
+                        {"error_rate", healthMetrics.errorRate.load()},
                         //{"uptime_ms", CoreSystems::utils::getTimestampMs()},
-                        {"version", "1.0.0"}
+                        {"version", "1.0.0"},
                         {"primary_engine_operational", systemManager->getPrimaryVectorEngine() ? systemManager->getPrimaryVectorEngine()->isEngineOperational() : false},
                         {"backup_engine_operational", systemManager->getBackupVectorEngine() ? systemManager->getBackupVectorEngine()->isEngineOperational() : false}
                     }}
@@ -194,7 +199,11 @@ namespace groundControl {
                     auto report = telemetryProcessor->getPerformanceReport();
 
                     nlohmann::json data = {
-                        {"telemetry_report", report}
+                        {"total_queries", report["total_queries"]},
+                        {"average_response_time", report["average_response_time"]},
+                        {"error_rate", report["error_rate"]},
+                        {"telemetry_records", report["telemetry_records"]},
+                        {"timestamp", report["timestamp"]}
                     };
                     return {{"data", data}};
                 } else {
@@ -365,6 +374,7 @@ namespace groundControl {
                 });
                 //graphQL endpoint
                 server -> Post("/graphql", [this](const httplib::Request& req, httplib::Response& res){
+                    //will reveice every GraphQL request from frontent
                     try {
                         //converting raw http request into nlohmann::json object
                         auto requestJson = nlohmann::json::parse(req.body); 
@@ -378,7 +388,7 @@ namespace groundControl {
                             response = graphqlHandler->handleQuery(requestJson);
                         }
                         res.set_content(response.dump(), "application/json");
-                    } catch (const exception& e) {
+                    } catch (const std::exception& e) {
                         nlohmann::json errorResponse = {
                             {"errors", {{
                                 {"message", std::string("Server error: ") + e.what()},
@@ -442,7 +452,7 @@ namespace groundControl {
                 //giving server some time to start
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 
-                return (isRunning.load())l
+                return (isRunning.load())
             });
         }
         void shutdown() {
