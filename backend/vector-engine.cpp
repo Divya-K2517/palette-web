@@ -7,6 +7,7 @@
 #include <future>
 #include <sstream>
 #include <cstdlib> //for std::getenv
+#include <chrono>
 
 #ifdef _WIN32
     #include <windows.h>
@@ -18,7 +19,7 @@
 #include <fstream>
 
 namespace CoreSystems { 
-    struct pinterestImage {
+    struct PinterestImage {
         std::string id;
         std::string url;
         std::string description;
@@ -119,7 +120,7 @@ namespace CoreSystems {
             //checking for errors
             if (res != CURLE_OK || response.responseCode != 200) {
                 std::cerr << "Weaviate request failed: " << curl_easy_strerror(res) 
-                      << " (HTTP " << response.response_code << ")" << std::endl;
+                      << " (HTTP " << response.responseCode << ")" << std::endl;
             }
 
             //getting HTTP response code
@@ -152,18 +153,18 @@ namespace CoreSystems {
                 //read only reference to the concepts array in the json response
                 //concepts isnt an array by itself, but its memory spot points to the same spot as response["data"]["Get"]["Concept"] 
             
-            for (const auto& concept : concepts) { //iterating over each concept in the concepts array
+            for (const auto& c : concepts) { //iterating over each concept in the concepts array
                 Node node;
                 node.id = utils::generateUUID(); //generating a unique ID for the node
-                node.name = concept.value("name", ""); //getting the name field, defaulting to empty string if not present
-                node.similarityScore = concept["_additional"].value("certainty", 0.0f); //getting certainty from _additional field
+                node.name = c.value("name", ""); //getting the name field, defaulting to empty string if not present
+                node.similarityScore = c["_additional"].value("certainty", 0.0f); //getting certainty from _additional field
                 node.timestamp = utils::getCurrentTime(); //setting current time as timestamp
-                node.healthStatus = SystemHealth::NOMINAL; 
+                node.healthStatus = SystemHealthEnum::NOMINAL; 
                 node.level = level;
                 
                 //extracting embedding vector
-                if (concept["_additional"].contains("vector")) { 
-                    const auto& vector = concept["_additional"]["vector"]; //reference to vector (ex. [0.1, 0.2, 0.3] - array of floats)
+                if (c["_additional"].contains("vector")) { 
+                    const auto& vector = c["_additional"]["vector"]; //reference to vector (ex. [0.1, 0.2, 0.3] - array of floats)
                     if (vector.is_array()) { //checking if vector is an array 
                         for (const auto& val : vector) {
                             node.embedding.push_back(val.get<float>()); //adding each float in the vector array to node.embedding
@@ -206,7 +207,7 @@ namespace CoreSystems {
         }
     public:
         explicit PinterestClient(const std::string& apiKey) 
-            : apiKey(apiKey) curlHandle(nullptr), windowStart(std::chrono::system_clock::now()) {
+            : apiKey(apiKey), curlHandle(nullptr), windowStart(std::chrono::system_clock::now()) {
                 curlHandle = curl_easy_init(); //creates a cURL, retuns nullptr if it fails
                 if (!curlHandle) {
                     throw std::runtime_error("Failed to initialize CURL for PinterestClient");
@@ -222,12 +223,14 @@ namespace CoreSystems {
             std::lock_guard<std::mutex> lock(rateLimitMutex);
             
             auto now = std::chrono::system_clock::now();
-            auto daysElapsed = std::chrono::duration_cast<std::chrono::days>(now - windowStart).count();
 
+            auto hoursElapsed = std::chrono::duration_cast<std::chrono::hours>(now - windowStart).count();
+            int daysElapsed =  static_cast<int>(hoursElapsed / 24); //integer division
+            
             // reset window if a day has passed
             if (daysElapsed >= 1) {
-                requestsMade_ = 0;
-                windowStart_ = now;
+                requestsMade = 0;
+                windowStart = now;
             }
             return requestsMade < MAX_REQUESTS_PER_DAY; //returning true if requests made is less than max allowed
         }
@@ -236,7 +239,7 @@ namespace CoreSystems {
             return MAX_REQUESTS_PER_DAY - requestsMade.load(); 
         }
 
-        std::vector<pinterestImage> searchPins (const std::string& query) { //makes request to pinterest for pins
+        std::vector<PinterestImage> searchPins (const std::string& query) { //makes request to pinterest for pins
             if (!canMakeRequest()) {
                 std::cout << "Pinterest rate limit exceeded, using cached data instead" << std::endl;
                 return {};
@@ -246,8 +249,13 @@ namespace CoreSystems {
             requestsMade++;
 
             //constructing the Pinterest API search URL
+            char* escapedQuery = curl_easy_escape(curlHandle, query.c_str(), query.length());
+            if (!escapedQuery) {
+                std::cerr << "Failed to escape query for Pinterest API" << std::endl;
+                return {};
+            }
             std::string url = "https://api.pinterest.com/v5/pins/search?query=" + 
-                         curl_easy_escape(curlHandle, query.c_str(), query.length()) + 
+                         std::string(escapedQuery) + 
                          "&limit=10";
 
             curlResponse response;
@@ -260,10 +268,10 @@ namespace CoreSystems {
             curl_easy_setopt(curlHandle, CURLOPT_TIMEOUT, 15L); //15 second timeout for api
 
             //auth header
-            struct curl_slist* headers = nullptr //headers points to the spot in memory where the actual headers are stored
+            struct curl_slist* headers = nullptr; //headers points to the spot in memory where the actual headers are stored
             std::string authHeader = "Authorization: Bearer " + apiKey;
             headers = curl_slist_append(headers, authHeader.c_str());
-            curl_easy_setopt(curl_handle_, CURLOPT_HTTPHEADER, headers);
+            curl_easy_setopt(curlHandle, CURLOPT_HTTPHEADER, headers);
 
             //execute request
             CURLcode res = curl_easy_perform(curlHandle);
@@ -275,7 +283,7 @@ namespace CoreSystems {
 
             if (res != CURLE_OK || response.responseCode != 200) {
                 std::cerr << "Pinterest request failed: " << curl_easy_strerror(res) 
-                      << " (HTTP " << response.response_code << ")" << std::endl;
+                      << " (HTTP " << response.responseCode << ")" << std::endl;
                 return {};
             }
 
@@ -283,15 +291,15 @@ namespace CoreSystems {
             try {
                 auto jsonResponse = nlohmann::json::parse(response.data); //converts json string into a C++ nlohmann::json object
                 std::cout << "raw pinterest api response: " << jsonResponse.dump(2) << std::endl;
-                return parsePinterestResponse(jsonResponse)
+                return parsePinterestResponse(jsonResponse);
             } catch (const std::exception& e) {
                 std::cerr << "Failed to parse Pinterest response: " << e.what() << std::endl;
                 return {};
             }
         }
     private: 
-            std::vector<pinterestImage> parsePinterestResponse (const nlohman::json& response) {
-                std::vector<pinterestImage> images;
+            std::vector<PinterestImage> parsePinterestResponse (const nlohmann::json& response) {
+                std::vector<PinterestImage> images;
                 
                 if (!response.contains("items") || 
                     !response["items"].is_array() || 
@@ -300,7 +308,7 @@ namespace CoreSystems {
                     return images;
                 }
                 for (const auto& item : response["items"]) {
-                    pinterestImage image;
+                    PinterestImage image;
                     image.id = item.value("id", "");
                     image.description = item.value("description", "");
                     //getting url
@@ -362,7 +370,7 @@ namespace CoreSystems {
 
                 return true;
             } catch (const std::exception& e) {
-                std::cerr << "Failed to initialize " << engine_type_ << " Vector Engine: " << e.what() << std::endl;
+                std::cerr << "Failed to initialize " << engineType << " Vector Engine: " << e.what() << std::endl;
                 return false;
             }
         }
@@ -371,14 +379,14 @@ namespace CoreSystems {
             clearCache();
         }
         std::vector<Node> VectorEngine::vectorSearch(const std::string& query) {
-            if !(isOperational) {
+            if (!isOperational) {
                 throw std::runtime_error(engineType + " Vector Engine is not operational");
             }
-            std::cout << engineType_ << " Engine: Starting vector search for '" << query << "'" << std::endl;
+            std::cout << engineType << " Engine: Starting vector search for '" << query << "'" << std::endl;
             //checking local cache first
             auto cachedResults = checkCache(query);
             if (!cachedResults.empty()) { //match found in cache
-                std::cout << << "Cached result found for query: " << query << std::endl; 
+                std::cout << "Cached result found for query: " << query << std::endl; 
                 return cachedResults;
             }
             
@@ -397,14 +405,14 @@ namespace CoreSystems {
                 //getting related nodes for each in relatedNodes
                 //semanticSearch returns nodes in descending order of closeness to query, so relatedNodes[0] is the node closest to query
                 auto secondLevelNodes = weaviateClient -> semanticSearch(relatedNodes[i].name, 2);
-                all_nodes.insert(all_nodes.end(), second_level.begin(), second_level.end()); //adding second level nodes to end of allNodes
+                allNodes.insert(allNodes.end(), secondLevelNodes.begin(), secondLevelNodes.end()); //adding second level nodes to end of allNodes
             }
 
             //adding pinterest images to each node (asynchronous)
             auto enhancedNodes = enhanceWithPinterestData(std::move(allNodes));;
             
             updateCache(query, enhancedNodes);
-            std::cout << engineType_ << " Engine: Found " << enhancedNodes.size() << " enhanced nodes" << std::endl;
+            std::cout << engineType << " Engine: Found " << enhancedNodes.size() << " enhanced nodes" << std::endl;
             return enhancedNodes;
 
         }
@@ -430,7 +438,7 @@ namespace CoreSystems {
             std::lock_guard<std::mutex> lock(cacheMutex);
             //assiging the new nodes as the value to the key/query
             searchCache[query] = nodes;
-            lastCacheUpdate = std::chrono::system_clock::now()
+            lastCacheUpdate = std::chrono::system_clock::now();
 
             //limiting cache size
             if (searchCache.size() > 1000) {
@@ -479,12 +487,12 @@ namespace CoreSystems {
             searchCache.clear();
             imageCache.clear();
         }
-        size_t VectorEngine::getCacheSize() const {
+        size_t VectorEngine::getCacheSize() {
             std::lock_guard<std::mutex> lock(cacheMutex);
             return searchCache.size() + imageCache.size();
         }
 
-        std::vector<pinterestImage> VectorEngine::getPinterestImages(const std::string& conceptName) const {
+        std::vector<PinterestImage> VectorEngine::getPinterestImages(const std::string& conceptName)  {
             std::lock_guard<std::mutex> lock(cacheMutex);
             auto it = imageCache.find(conceptName);
             if (it != imageCache.end()) { //if conceptName is in the cache
@@ -586,7 +594,7 @@ namespace CoreSystems {
             }
             std::cout << "SystemManager shutdown complete" << std::endl;
         }
-        std::vector<Node> SystemManager::vectorSearch(const std::string& query) {
+        std::vector<Node> SystemManager::search(const std::string& query) {
             std::cout << "SystemManager: Processing search for '" << query << "'" << std::endl;
 
             try {
@@ -609,10 +617,11 @@ namespace CoreSystems {
             }
         }
         SystemHealthEnum SystemManager::getSystemHealth() const {
-            return *healthMetrics.healthStatus;
+            return healthMetrics -> getHealthStatus();
         }
-        SystemHealthMetrics SystemManager::getHealthMetrics() const {
-            return *healthMetrics;
+        SystemHealthMetrics& SystemManager::getHealthMetrics() const {
+            SystemHealthMetrics& metrics = *healthMetrics; //dereferencing the unique_ptr to get the actual object
+            return metrics;
         }
         void SystemManager::recordTelemetry(const SearchTelemetry& telemetry) {
             std::lock_guard<std::mutex> lock(telemetryMutex);
@@ -672,7 +681,7 @@ namespace CoreSystems {
         void SystemManager::healthMonitorWorker() {
             while(!shutdownRequested.load()) {
                 try{
-                    healthUpdates->cpuUsage.store(utils::calculateSystemLoad());
+                    healthMetrics->cpuUsage.store(utils::calculateSystemLoad());
                         //calculateSystemLoad() calculates how busy the cpu is
                     #ifdef _WIN32 //for windows
                         PROCESS_MEMORY_COUNTERS pmc;
@@ -712,7 +721,7 @@ namespace CoreSystems {
             std::lock_guard<std::mutex> lock(processingMutex);
 
             totalQueries.fetch_add(1);
-            totalResponseTime.fetch_add(telemetry.responseTimeMs);
+            totalResponseTime.fetch_add(telemetry.processingTime);
 
             if (telemetryHistory.size() >= MAX_TELEMETRY_RECORDS) {
                 telemetryHistory.erase(telemetryHistory.begin());
@@ -720,7 +729,7 @@ namespace CoreSystems {
             }
             telemetryHistory.push_back(telemetry); //adding new telemetry record to history
             std::cout << "Telemetry processed: " << telemetry.searchPhrase << " in " 
-                      << telemetry.responseTimeMs << "ms" << std::endl;
+                      << telemetry.processingTime<< "ms" << std::endl;
         }
         nlohmann::json TelemetryProcessor::getPerformanceReport() const {
             std::lock_guard<std::mutex> lock(processingMutex);

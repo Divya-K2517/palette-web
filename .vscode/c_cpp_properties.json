@@ -5,7 +5,7 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/backend",
-                "${workspaceFolder}/backend/http-server/nlohmann", 
+                "${workspaceFolder}/backend/http-server/nlohmann",
                 "${workspaceFolder}/backend/vector-engine",
                 "${workspaceFolder}include",
                 "C:/msys64/usr/include",
@@ -16,7 +16,9 @@
                 "UNICODE",
                 "_UNICODE"
             ],
-            "compilerPath": "C:/msys64/ucrt64/bin/g++.exe"
+            "cppStandard": "c++20",
+            "compilerPath": "C:/msys64/ucrt64/bin/g++.exe",
+            "intelliSenseMode": "windows-gcc-x64"
         }
     ],
     "version": 4

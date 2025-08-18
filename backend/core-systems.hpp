@@ -17,7 +17,7 @@
 //class SystemManager is the brains: starts engines(for weaviate & pinterest), spawns threads, acceptes requests, and records telemetry data
 //class VectorEngine does the vector search(communicating with weaviate), cahches results, and handles images
 //class TelemetryProcessor keeps track of performance data and will help detect slowness or bugs
-//SystemHealth gives an overview of the system health
+//SystemHealthMetrics gives an overview of the system health
 
 namespace CoreSystems {
 
@@ -33,7 +33,7 @@ namespace CoreSystems {
             case SystemHealthEnum::CRITICAL: return "CRITICAL";
             default: return "UNKNOWN";
         }
-    }
+    };
 
     struct Node {
         std::string id; //id for each node
@@ -41,7 +41,7 @@ namespace CoreSystems {
         std::vector<float> embedding; //embedding vector for the node, showing where it is in the vector space
         float similarityScore; //similarity score of the node with respect to the search/center node
         std::chrono::system_clock::time_point timestamp; //timestamp of the node creation or last update
-        SystemHealth healthStatus;  //health status of the node, defined in SystemHealth enum
+        SystemHealthEnum healthStatus;  //health status of the node, defined in SystemHealth enum
         int level; //0=query, 1=first level, 2=second level
         //for conversion to/from JSON for api
         nlohmann::json toJson() const{
@@ -65,7 +65,7 @@ namespace CoreSystems {
             node.name = j.value("name", "");
             node.embedding = j.value("embedding", std::vector<float>{});
             node.similarityScore = j.value("similarityScore", 0.0f);
-            node.healthStatus = static_cast<SystemHealth>(j.value("healthStatus", 0));
+            node.healthStatus = static_cast<SystemHealthEnum>(j.value("healthStatus", 0));
             node.level = j.value("level", 0);
             
             auto timestamp_ms = j.value("timestamp", 0L);
@@ -79,6 +79,7 @@ namespace CoreSystems {
         std:: string searchId; //id for the search
         std:: string searchPhrase; //search phrase used
         uint64_t processingTime; //processing time in milliseconds
+        
         size_t nodesFound; //number of nodes found in the search
         std::chrono::system_clock::time_point timestamp; //time the search finished
         nlohmann::json toJson() const {
@@ -92,25 +93,25 @@ namespace CoreSystems {
         }
     };
 
-    struct SystemHealth { //will be used to track system health and performance 
+    struct SystemHealthMetrics { //will be used to track system health and performance 
         std::atomic<float> cpuUsage{0.0f};
         std::atomic<float> memoryUsage{0.0f};
         std::atomic<size_t> activeConnections{0};
-        std::atomic<std::chrono::system_clock::time_point> lastHeartbeat;
+        std::atomic<uint64_t> lastHeartbeat;
         std::atomic<float> errorRate{0.0f};
             // Atomic variables for thread-safe operations on a single variable
             //will ensure that operations on shared variables are indivisible, preventing race conditions
-        SystemHealth getHealthStatus() const {
+        SystemHealthEnum getHealthStatus() const {
             float cpu = cpuUsage.load();
             float memory = memoryUsage.load();
             float errors = errorRate.load();
             
             if (cpu > 90.0f || memory > 90.0f || errors > 0.1f) {
-                return SystemHealth::CRITICAL;
+                return SystemHealthEnum::CRITICAL;
             } else if (cpu > 70.0f || memory > 70.0f || errors > 0.05f) {
-                return SystemHealth::DEGRADED;
+                return SystemHealthEnum::DEGRADED;
             } else {
-                return SystemHealth::NOMINAL;
+                return SystemHealthEnum::NOMINAL;
             }
         }
         nlohmann::json toJson() const {
@@ -123,7 +124,7 @@ namespace CoreSystems {
                 {"healthStatus", static_cast<int>(getHealthStatus())}
             };
         }
-    }
+    };
 
     //forward declarations
     class VectorEngine;
@@ -134,7 +135,7 @@ namespace CoreSystems {
         std::unique_ptr<VectorEngine> primaryVectorEngine;
         std::unique_ptr<VectorEngine> backupVectorEngine;
         std::unique_ptr<TelemetryProcessor> telemetryProcessor;
-        std::unique_ptr<SystemHealth> healthMetrics;
+        std::unique_ptr<SystemHealthMetrics> healthMetrics;
             //std::unique_ptr is a smart pointer that deletes the object when it goes out of scope
             //ensures that the object is deleted when the SystemManager object is destroyed
         
@@ -168,8 +169,11 @@ namespace CoreSystems {
         void shutdown(); 
         std::vector<Node> search(const std::string& query);
         SystemHealthEnum getSystemHealth() const; //no parameters, returns a SystemHealthEnum 
-         SystemHealthMetrics SystemManager::getHealthMetrics() const;
-        void recordTelemetry(const SearchTelemetry& telemetry); 
+        SystemHealthMetrics& getHealthMetrics() const;
+            //this will reurn healthMetrics object, which is a unique_ptr
+            //unique_ptr objects cant be copied, so we return a reference to the object
+            //which is why the signatur includes &
+        void recordTelemetry(const SearchTelemetry& telemetry);
         bool emergencySubsystemRestart(const std::string& subsystem_name);
 
         VectorEngine* getPrimaryVectorEngine() const { return primaryVectorEngine.get(); }
@@ -196,12 +200,10 @@ namespace CoreSystems {
         std::chrono::system_clock::time_point lastCacheUpdate;
         static constexpr std::chrono::minutes CACHE_EXPIRY_TIME{10};
 
-        //main vector search function
-        //std::vector<Node> vectorSearch(const std::string& query);
 
-        std::atomic<bool> isOperational() const {
-            return isOperational;
-        }
+        // std::atomic<bool> isOperationalCheck() const {
+        //     return isOperational.load();
+        // }
 
     public:
         VectorEngine(const std::string& engineType); //constructor
@@ -219,10 +221,10 @@ namespace CoreSystems {
         void updateCache(const std::string& query, const std::vector<Node>& nodes);
         std::vector<Node> enhanceWithPinterestData(std::vector<Node> nodes); //adding images from pinterest to nodes
         void clearCache();
-        size_t getCacheSize() const;
+        size_t getCacheSize();
 
         //pinterest image access
-        std::vector<struct pinterestImage> getPinterestImages(const std::string& conceptName) const;
+        std::vector<struct PinterestImage> getPinterestImages(const std::string& conceptName);
         bool refreshPinterestData(const std::string& conceptName = "");
     };
     class TelemetryProcessor { 
@@ -233,7 +235,7 @@ namespace CoreSystems {
         mutable std::mutex processingMutex;
             //mutable allows the mutex to be modified even in const methods
         
-        std::vector<SearchTelemetry> telemeteryHistory;
+        std::vector<SearchTelemetry> telemetryHistory;
         static constexpr size_t MAX_TELEMETRY_RECORDS = 10000;
 
         //performance tracking
