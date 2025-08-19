@@ -8,7 +8,7 @@
 #include <sstream>
 #include <cstdlib> //for std::getenv
 #include <chrono>
-
+#include <filesystem>
 #ifdef _WIN32
     #include <windows.h>
     #include <psapi.h>
@@ -17,6 +17,9 @@
 #endif
 
 #include <fstream>
+#include <string>
+#include <map>
+
 
 namespace CoreSystems { 
     struct PinterestImage {
@@ -342,26 +345,69 @@ namespace CoreSystems {
         VectorEngine::~VectorEngine() {
             shutdown();
         }
+        //for loading env variables
+        std::map<std::string,std::string> load_env(const std::string& path = ".env") {
+            std::map<std::string,std::string> vars;
+            std::ifstream file(path);
+            std::string line;
+            while(std::getline(file, line)) {
+                if(line.empty() || line[0] == '#') continue;
+                auto pos = line.find('=');
+                if(pos == std::string::npos) continue;
+
+                std::string key = line.substr(0, pos);
+                std::string value = line.substr(pos+1);
+
+                // trim whitespace
+                key.erase(0, key.find_first_not_of(" \t"));
+                key.erase(key.find_last_not_of(" \t") + 1);
+                value.erase(0, value.find_first_not_of(" \t"));
+                value.erase(value.find_last_not_of(" \t") + 1);
+
+                // remove surrounding quotes if present
+                if(!value.empty() && ((value.front() == '"' && value.back() == '"') ||
+                                    (value.front() == '\'' && value.back() == '\''))) {
+                    value = value.substr(1, value.size()-2);
+                }
+
+                vars[key] = value;
+
+                std::string assignment = key + "=" + value;
+                 _putenv(assignment.c_str());
+            }
+            return vars;
+        }
         bool VectorEngine::initialize() {
             try { //initializing weaviate and pinterest clients
                 std::string weaviateUrl = (engineType == "primary") ? "http://localhost:8080" : "http://backup-weaviate:8080";
                 
+                std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
+                std::cout << "Looking for .env file..." << std::endl;
+
                 //getting weaviate api key from environment variable
-                std::string weaviateApiKey = std::getenv("WEAVIATE_API_KEY") ? 
-                    std::getenv("WEAVIATE_API_KEY") : "";
+                auto env = load_env("backend/.env"); //loading environment variables from .env file
+                std::string weaviateApiKey = env.count("WEAVIATE_API_KEY") ? 
+                    env["WEAVIATE_API_KEY"] : "";
                 if (weaviateApiKey.empty() || weaviateApiKey == "") {
                     std::cerr << "WEAVIATE_API_KEY is not set" << std::endl;
+                } else {
+                    std::cout << "WEAVIATE_API_KEY loaded from .env file" << std::endl;
                 }
 
                 weaviateClient = std::make_unique<WeaviateClient>(weaviateUrl, weaviateApiKey);
                     //std::make_unique returns a std::unique_ptr<WeaviateClient>
                     //this object will be deleted when unique_ptr goes out of scope (vector engine objecft is deleted or weaviateClient is reset/gets new pointer)
                     //prevents memory leacks
-                std::string pinterestApiKey = std::getenv("PINTEREST_API_KEY") ? 
-                    std::getenv("PINTEREST_API_KEY") : "";
+
+                //getting pinterest api key from environment variable
+                std::string pinterestApiKey = env.count("PINTEREST_API_KEY") ? 
+                    env["PINTEREST_API_KEY"] : "" ;
                 if (pinterestApiKey.empty()) {
                     std::cerr << "PINTEREST_API_KEY is not set" << std::endl;
+                } else {
+                    std::cout << "PINTEREST_API_KEY loaded from .env file" << std::endl;
                 }
+
                 pinterestClient = std::make_unique<PinterestClient>(pinterestApiKey);
                     //weaviateClient and pinterestClient are pointers bc of std::make_unique
                     //they point to the address of the new WeaviateClient/PinterestClient object

@@ -1,13 +1,43 @@
 {
     "version": "2.0.0",
     "tasks": [
+            {
+        "label": "CMake Configure",
+        "type": "shell",
+        "command": "cmake",
+        "args": [
+            "-S",
+            "${workspaceFolder}",
+            "-B",
+            "${workspaceFolder}/build"
+        ],
+        "group": "build",
+        "problemMatcher": []
+        },
+        {
+        "label": "CMake Build",
+        "type": "shell",
+        "command": "cmake",
+        "args": [
+            "--build",
+            "${workspaceFolder}/build"
+        ],
+        "group": {
+            "kind": "build",
+            "isDefault": true
+        },
+        "dependsOn": "CMake Configure",
+        "problemMatcher": [
+            "$gcc"
+        ]
+        },
         {
             "label": "build",
             "type": "shell",
             "command": "g++",
             "args": [
                 "-g",
-                "src/*.cpp",
+                "backend/*.cpp",
                 "-o",
                 "build/backend/core-systems.exe"
             ],
@@ -24,11 +54,15 @@
                 "-fdiagnostics-color=always",
                 "-g",
                 "${file}",
+                //"dotenv.cpp",
                 "-o",
                 "${fileDirname}\\${fileBasenameNoExtension}.exe",
                 "-lws2_32",
                 "-lrpcrt4",
-                "-lcurl"
+                "-lcurl",
+                //"-ldotenv",
+                "-mconsole"
+
             ],
             "options": {
                 "cwd": "C:/msys64/ucrt64/bin"
