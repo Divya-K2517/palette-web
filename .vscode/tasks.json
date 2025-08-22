@@ -26,6 +26,7 @@
                 //"backend/*.cpp",
                 "backend/http-server.cpp", //only http-server has the main function
                 //"backend/vector-engine.cpp",
+                //"backend/core-systems.hpp",
                 "-o",
                 "build/backend/core-systems.exe",
                 "-lws2_32",

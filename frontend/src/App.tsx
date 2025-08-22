@@ -5,7 +5,7 @@ const API_BASE = 'http://localhost:8080';
 //two backend endpoints are /graphql and /health
 const VectorSearchFrontend = () => {
   interface SearchResultsType {
-    data: {
+    ///data: {
       search_concepts: {
         mission_id: string;
         query: string;
@@ -23,7 +23,7 @@ const VectorSearchFrontend = () => {
         pinterest_integration_status: string;
         timestamp: number;
       };
-    };
+    //};
   }
   interface SystemHealthType {
     // nlohmann::json data = {
@@ -36,7 +36,7 @@ const VectorSearchFrontend = () => {
     //                     {"backup_engine_operational", systemManager->getBackupVectorEngine() ? systemManager->getBackupVectorEngine()->isEngineOperational() : false}
     //                 }}
     //             };
-    data: {
+    //data: {
       system_health: {
         status: number;
         cpu_useage: number;
@@ -49,7 +49,7 @@ const VectorSearchFrontend = () => {
         primary_engine_operational: boolean;
         backup_engine_operational: boolean;
       };
-    };
+    //};
   }
   interface TelemetryReportType {
     // nlohmann::json data = {
@@ -59,13 +59,13 @@ const VectorSearchFrontend = () => {
     //                     {"telemetry_records", report.telemetry_records},
     //                     {"timestamp", report.timestamp}
     //                 };
-    data: {
+    //data: {
       total_queries: number;
       average_response_time: number;
       error_rate: number;
       telemetry_records: number;
       timestamp: number;
-    };
+    //};
   }
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResultsType | null>(null);
@@ -132,14 +132,14 @@ const VectorSearchFrontend = () => {
           }
         }
       `;
-      
+      console.log('Executing search query:', query, 'with variables:', { query: searchQuery, limit: 10 });
       const data = await makeGraphQLRequest(query, {
         //gets related nodes based on search query
         query: searchQuery,
         limit: 10
       });
-      
-      setSearchResults(data.search_concepts); 
+      console.log('Search results:', data);
+      setSearchResults(data); 
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -149,6 +149,7 @@ const VectorSearchFrontend = () => {
 
   //get system health
   const fetchSystemHealth = async () => {
+    console.log('Fetching system health...');
     try {
       const query = `
         query SystemHealth {
@@ -169,7 +170,7 @@ const VectorSearchFrontend = () => {
       `;
       
       const data = await makeGraphQLRequest(query);
-      setSystemHealth(data.system_health);
+      setSystemHealth(data);
     } catch (err: any) {
       setError(err.message);
     }
@@ -177,6 +178,7 @@ const VectorSearchFrontend = () => {
 
   //get telemetry report
   const fetchTelemetryReport = async () => {
+    console.log('Fetching telemetry report...');
     try {
       const query = `
         query TelemetryReport {
@@ -191,7 +193,7 @@ const VectorSearchFrontend = () => {
       `;
       
       const data = await makeGraphQLRequest(query);
-      setTelemetryReport(data.telemetry_report);
+      setTelemetryReport(data);
     } catch (err: any) {
       setError(err.message);
     }
@@ -319,25 +321,25 @@ const VectorSearchFrontend = () => {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                     <div>
                       <span className="font-medium">Mission ID:</span>
-                      <div className="font-mono text-xs">{searchResults.data.search_concepts.mission_id}</div>
+                      <div className="font-mono text-xs">{searchResults.search_concepts.mission_id}</div>
                     </div>
                     <div>
                       <span className="font-medium">Processing Time:</span>
-                      <div>{searchResults.data.search_concepts.processing_time_ms}ms</div>
+                      <div>{searchResults.search_concepts.processing_time_ms}ms</div>
                     </div>
                     <div>
                       <span className="font-medium">Nodes Found:</span>
-                      <div>{searchResults.data.search_concepts.nodes.length}</div>
+                      <div>{searchResults.search_concepts.nodes.length}</div>
                     </div>
                     <div>
                       <span className="font-medium">Pinterest Status:</span>
-                      <div className="text-green-600">{searchResults.data.search_concepts.pinterest_integration_status}</div>
+                      <div className="text-green-600">{searchResults.search_concepts.pinterest_integration_status}</div>
                     </div>
                   </div>
                 </div>
 
                 <div className="space-y-3">
-                  {searchResults.data.search_concepts.nodes.map((node, index) => (
+                  {searchResults.search_concepts.nodes.map((node, index) => (
                     <div key={node.id} className="border border-gray-200 rounded-lg p-4">
                       <div className="flex justify-between items-start mb-2">
                         <h3 className="font-medium text-lg">{node.name}</h3>
@@ -383,37 +385,37 @@ const VectorSearchFrontend = () => {
                 <div className="space-y-3">
                   <div className="bg-gray-50 p-3 rounded">
                     <div className="text-sm font-medium mb-2">Overall Status</div>
-                    <div className={`font-bold ${getHealthStatusColor(systemHealth.data.system_health.status)}`}>
-                      {getHealthStatusText(systemHealth.data.system_health.status)}
+                    <div className={`font-bold ${getHealthStatusColor(systemHealth.system_health.status)}`}>
+                      {getHealthStatusText(systemHealth.system_health.status)}
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <div className="font-medium">CPU Usage</div>
-                      <div>{systemHealth.data.system_health.cpu_useage.toFixed(1)}%</div>
+                      <div>{systemHealth.system_health.cpu_useage.toFixed(1)}%</div>
                     </div>
                     <div>
                       <div className="font-medium">Memory Usage</div>
-                      <div>{systemHealth.data.system_health.memory_usage.toFixed(1)} MB</div>
+                      <div>{systemHealth.system_health.memory_usage.toFixed(1)} MB</div>
                     </div>
                     <div>
                       <div className="font-medium">Active Connections</div>
-                      <div>{systemHealth.data.system_health.active_connections}</div>
+                      <div>{systemHealth.system_health.active_connections}</div>
                     </div>
                     <div>
                       <div className="font-medium">Error Rate</div>
-                      <div>{(systemHealth.data.system_health.error_rate * 100).toFixed(2)}%</div>
+                      <div>{(systemHealth.system_health.error_rate * 100).toFixed(2)}%</div>
                     </div>
                   </div>
 
                   <div className="pt-3 border-t">
                     <div className="text-sm space-y-1">
-                      <div>Primary Engine: <span className={systemHealth.data.system_health.primary_engine_operational ? 'text-green-600' : 'text-red-600'}>
-                        {systemHealth.data.system_health.primary_engine_operational ? '✓ Online' : '✗ Offline'}
+                      <div>Primary Engine: <span className={systemHealth.system_health.primary_engine_operational ? 'text-green-600' : 'text-red-600'}>
+                        {systemHealth.system_health.primary_engine_operational ? '✓ Online' : '✗ Offline'}
                       </span></div>
-                      <div>Backup Engine: <span className={systemHealth.data.system_health.backup_engine_operational ? 'text-green-600' : 'text-red-600'}>
-                        {systemHealth.data.system_health.backup_engine_operational ? '✓ Online' : '✗ Offline'}
+                      <div>Backup Engine: <span className={systemHealth.system_health.backup_engine_operational ? 'text-green-600' : 'text-red-600'}>
+                        {systemHealth.system_health.backup_engine_operational ? '✓ Online' : '✗ Offline'}
                       </span></div>
                     </div>
                   </div>
@@ -441,19 +443,19 @@ const VectorSearchFrontend = () => {
                 <div className="space-y-3 text-sm">
                   <div>
                     <div className="font-medium">Total Queries</div>
-                    <div className="text-2xl font-bold text-blue-600">{telemetryReport.data.total_queries}</div>
+                    <div className="text-2xl font-bold text-blue-600">{telemetryReport.total_queries}</div>
                   </div>
                   <div>
                     <div className="font-medium">Avg Response Time</div>
-                    <div>{telemetryReport.data.average_response_time.toFixed(2)}ms</div>
+                    <div>{telemetryReport.average_response_time.toFixed(2)}ms</div>
                   </div>
                   <div>
                     <div className="font-medium">Error Rate</div>
-                    <div>{(telemetryReport.data.error_rate * 100).toFixed(2)}%</div>
+                    <div>{(telemetryReport.error_rate * 100).toFixed(2)}%</div>
                   </div>
                   <div>
                     <div className="font-medium">Records Stored</div>
-                    <div>{telemetryReport.data.telemetry_records}</div>
+                    <div>{telemetryReport.telemetry_records}</div>
                   </div>
                 </div>
               )}
