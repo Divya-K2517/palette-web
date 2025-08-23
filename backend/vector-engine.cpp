@@ -59,7 +59,7 @@ namespace CoreSystems {
         }
     public: 
         explicit WeaviateClient(std:: string& baseUrl, const std::string& apiKey) //constructor
-            : baseUrl(baseUrl), apiKey(apiKey), curlHandle(nullptr) { //initialziing the baseUrl to the input and curlHandle to nullptr
+            : baseUrl(baseUrl), apiKey(""), curlHandle(nullptr) { //initialziing the baseUrl to the input and curlHandle to nullptr
                 curlHandle = curl_easy_init(); //creates a cURL, retuns nullptr if it fails
                 if (!curlHandle) { //throwing error if curlHandle is nullptr
                     throw std::runtime_error("Failed to initialize CURL for WeaviateClient");
@@ -134,6 +134,7 @@ namespace CoreSystems {
             //parsing JSON response
             try {
                 auto jsonResponse = nlohmann::json::parse(response.data);
+                std::cout << " Weaviate Response: " << jsonResponse.dump(2) << std::endl;
                 return parseWeaviateResponse(jsonResponse, query, level); 
             } catch (const std::exception& e) {
                 std::cerr << "Failed to parse Weaviate response: " << e.what() << std::endl;
@@ -386,13 +387,7 @@ namespace CoreSystems {
 
                 //getting weaviate api key from environment variable
                 auto env = load_env("backend/.env"); //loading environment variables from .env file
-                std::string weaviateApiKey = env.count("WEAVIATE_API_KEY") ? 
-                    env["WEAVIATE_API_KEY"] : "";
-                if (weaviateApiKey.empty() || weaviateApiKey == "") {
-                    std::cerr << "WEAVIATE_API_KEY is not set" << std::endl;
-                } else {
-                    std::cout << "WEAVIATE_API_KEY loaded from .env file" << std::endl;
-                }
+                std::string weaviateApiKey = "";
 
                 weaviateClient = std::make_unique<WeaviateClient>(weaviateUrl, weaviateApiKey);
                     //std::make_unique returns a std::unique_ptr<WeaviateClient>
